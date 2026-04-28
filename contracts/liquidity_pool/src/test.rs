@@ -1,12 +1,35 @@
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    Address, Env, String as SorobanString, TryIntoVal,
+    contract, contractimpl, contracttype, Address, Env, String as SorobanString, TryIntoVal,
 };
 
 // Import Vec from alloc for no_std environment
 extern crate alloc;
 use alloc::vec::Vec;
+
+#[contract]
+struct MockOracle;
+
+#[contracttype]
+#[derive(Clone)]
+enum OracleDataKey {
+    Price,
+}
+
+#[contractimpl]
+impl MockOracle {
+    pub fn set_price(e: Env, price: i128) {
+        e.storage().instance().set(&OracleDataKey::Price, &price);
+    }
+
+    pub fn latest_price(e: Env) -> i128 {
+        e.storage()
+            .instance()
+            .get(&OracleDataKey::Price)
+            .unwrap_or(100_000_000i128)
+    }
+}
 
 #[test]
 fn test_basic_flow() {
@@ -944,6 +967,85 @@ fn test_set_fee_above_max() {
 
     // 101 bps — should panic with InvalidFee
     client.set_fee(&101);
+}
+
+#[test]
+fn test_oracle_fee_scheduling_and_timelock_execution() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let contract_id = e.register(LiquidityPool, ());
+    let client = LiquidityPoolClient::new(&e, &contract_id);
+
+    let admin = Address::generate(&e);
+    let token_a = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_b = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    client.initialize(&admin, &token_a, &token_b);
+
+    let oracle_id = e.register(MockOracle, ());
+    let oracle = MockOracleClient::new(&e, &oracle_id);
+    oracle.set_price(&100_000_000);
+
+    client.configure_fee_oracle(&oracle_id, &30, &5);
+
+    // First sync seeds the initial price and does not schedule.
+    let first_sync = client.sync_fee_from_oracle();
+    assert!(first_sync.is_none());
+
+    // 10% jump (1000 bps) should schedule high-volatility fee (100 bps).
+    oracle.set_price(&110_000_000);
+    let scheduled = client.sync_fee_from_oracle();
+    assert!(scheduled.is_some());
+    let pending = scheduled.unwrap();
+    assert_eq!(pending.new_fee_bps, 100);
+    assert_eq!(client.get_last_volatility_bps(), 1000);
+
+    // Not executable before timelock.
+    let early = client.try_execute_fee_update();
+    assert_eq!(early, Err(Ok(Error::TimelockNotElapsed)));
+
+    // Advance ledgers and execute.
+    let mut ledger_info = e.ledger().get();
+    ledger_info.sequence_number = pending.executable_after_ledger;
+    e.ledger().set(ledger_info);
+
+    let new_fee = client.execute_fee_update();
+    assert_eq!(new_fee, 100);
+    assert_eq!(client.get_fee(), 100);
+    assert!(client.get_pending_fee_update().is_none());
+}
+
+#[test]
+fn test_oracle_low_volatility_keeps_base_fee() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let contract_id = e.register(LiquidityPool, ());
+    let client = LiquidityPoolClient::new(&e, &contract_id);
+
+    let admin = Address::generate(&e);
+    let token_a = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_b = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    client.initialize(&admin, &token_a, &token_b);
+
+    let oracle_id = e.register(MockOracle, ());
+    let oracle = MockOracleClient::new(&e, &oracle_id);
+    oracle.set_price(&100_000_000);
+    client.configure_fee_oracle(&oracle_id, &30, &3);
+
+    assert!(client.sync_fee_from_oracle().is_none());
+    // 0.2% move => 20 bps, below low threshold.
+    oracle.set_price(&100_200_000);
+    assert!(client.sync_fee_from_oracle().is_none());
+    assert_eq!(client.get_fee(), 30);
 }
 
 #[test]

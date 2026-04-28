@@ -6,11 +6,15 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use soroban_sdk::xdr::{
-    Hash, HostFunction, InvokeContractArgs, InvokeHostFunctionOp, LedgerEntry, LedgerKey, Limits,
-    Memo, MuxedAccount, Operation, OperationBody, Preconditions, ReadXdr, ScAddress, ScSymbol,
-    ScVal, SequenceNumber, SorobanAuthorizationEntry, SorobanTransactionData, Transaction,
+    AccountId, DiagnosticEvent, DiagnosticEventBody, Hash, HashIdPreimage,
+    HashIdPreimageSorobanAuthorization, HostFunction, InvokeContractArgs, InvokeHostFunctionOp,
+    LedgerEntry, LedgerKey, Limits, Memo, MuxedAccount, Operation, OperationBody, Preconditions,
+    PublicKey, ReadXdr, ScAddress, ScMapEntry, ScSymbol, ScVal, SequenceNumber,
+    SorobanAddressCredentials, SorobanAuthorizationEntry, SorobanAuthorizedFunction,
+    SorobanAuthorizedInvocation, SorobanCredentials, SorobanTransactionData, Transaction,
     TransactionExt, TransactionV1Envelope, Uint256, VecM, WriteXdr,
 };
+use ed25519_dalek::Signer as Ed25519Signer;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -95,8 +99,56 @@ pub struct SimulationResult {
     pub cost_stroops: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state_dependency: Option<Vec<StateDependency>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl_analysis: Option<TtlAnalysisReport>,
     /// The SorobanTransactionData XDR returned by the RPC (base64)
     pub transaction_data: String,
+    /// Cross-contract call graph
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call_graph: Option<CallGraph>,
+    /// Snapshot of the ledger state used/touched during simulation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_snapshot: Option<SimulationStateSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallNode {
+    pub contract_id: String,
+    pub function: String,
+    pub children: Vec<CallNode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CallGraph {
+    pub root: CallNode,
+}
+
+impl CallGraph {
+    /// Export the call graph to Mermaid format
+    pub fn to_mermaid(&self) -> String {
+        let mut mermaid = String::from("graph TD\n");
+        self.append_mermaid_nodes(&self.root, &mut mermaid, &mut 0);
+        mermaid
+    }
+
+    fn append_mermaid_nodes(&self, node: &CallNode, mermaid: &mut String, id_gen: &mut usize) {
+        let current_id = *id_gen;
+        mermaid.push_str(&format!("    n{current_id}[\"{}:{}\"]\n", node.contract_id, node.function));
+        
+        for child in &node.children {
+            *id_gen += 1;
+            let child_id = *id_gen;
+            mermaid.push_str(&format!("    n{current_id} --> n{child_id}\n"));
+            self.append_mermaid_nodes(child, mermaid, id_gen);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimulationStateSnapshot {
+    pub ledger_entries: HashMap<String, String>, // Key-B64 -> Entry-B64
+    pub ttl_entries: HashMap<String, u32>,       // Key-B64 -> LiveUntilLedger
+    pub latest_ledger: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +161,30 @@ pub struct StateDependency {
 pub enum DataSource {
     Live,
     Injected,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TtlEntryReport {
+    pub key: String,
+    pub live_until_ledger: u32,
+    pub remaining_ledgers: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExtendTtlSuggestion {
+    pub key: String,
+    pub current_live_until_ledger: u32,
+    pub remaining_ledgers: i64,
+    pub extend_to_ledger: u32,
+    pub ledgers_to_extend_by: u32,
+    pub suggested_operation: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TtlAnalysisReport {
+    pub current_ledger: u64,
+    pub touched_entries: Vec<TtlEntryReport>,
+    pub extend_ttl_suggestions: Vec<ExtendTtlSuggestion>,
 }
 
 #[derive(Debug, Serialize)]
@@ -150,7 +226,7 @@ struct RpcError {
     data: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct SimulationRpcResult {
     #[serde(default)]
@@ -160,8 +236,10 @@ struct SimulationRpcResult {
     #[serde(default)]
     cost: Option<ResourceCost>,
     #[serde(default)]
-    #[allow(dead_code)]
     results: Vec<serde_json::Value>,
+    /// Diagnostic events (base64 encoded XDR)
+    #[serde(default)]
+    events: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -169,6 +247,63 @@ struct SimulationRpcResult {
 struct ResourceCost {
     cpu_insns: String,
     mem_bytes: String,
+}
+// ── Multi-account authorization ───────────────────────────────────────────────
+
+/// Represents one signer in a multi-account authorization scenario.
+///
+/// Use `SecretKey` when you hold the raw secret and want the engine to sign
+/// automatically. Use `PreSignedXdr` when signing happened outside the engine
+/// (hardware wallet, multisig coordinator, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AuthSigner {
+    /// Raw Stellar secret key (S...). The engine builds and signs the
+    /// `SorobanAuthorizationEntry` automatically.
+    SecretKey { secret: String },
+    /// A fully-formed, already-signed `SorobanAuthorizationEntry` in base64 XDR.
+    PreSignedXdr { xdr: String },
+}
+
+#[derive(Debug, Serialize)]
+struct GetLedgerEntriesRequest {
+    jsonrpc: String,
+    id: u64,
+    method: String,
+    params: GetLedgerEntriesParams,
+}
+
+#[derive(Debug, Serialize)]
+struct GetLedgerEntriesParams {
+    keys: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GetLedgerEntriesResponse {
+    #[serde(flatten)]
+    result: LedgerEntriesResponseResult,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum LedgerEntriesResponseResult {
+    Success { result: GetLedgerEntriesResult },
+    Error { error: RpcError },
+}
+
+#[derive(Debug, Deserialize)]
+struct GetLedgerEntriesResult {
+    #[serde(default)]
+    entries: Vec<LedgerEntryWithMeta>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LedgerEntryWithMeta {
+    key: String,
+    #[allow(dead_code)]
+    xdr: Option<String>,
+    live_until_ledger_seq: Option<u32>,
 }
 
 pub struct SimulationEngine {
@@ -181,6 +316,9 @@ pub struct SimulationEngine {
 }
 
 impl SimulationEngine {
+    const TTL_WARNING_THRESHOLD_LEDGERS: i64 = 120_000;
+    const TTL_TARGET_LEDGERS_AHEAD: i64 = 360_000;
+
     /// Create an engine backed by a single RPC URL (backward-compatible).
     #[allow(dead_code)]
     pub fn new(rpc_url: String) -> Self {
@@ -636,9 +774,268 @@ impl SimulationEngine {
             }
             ResponseResult::Success { result } => {
                 tracing::info!("Simulation successful at ledger {}", result.latest_ledger);
-                self.parse_simulation_result(result)
+                let mut parsed = self.parse_simulation_result(result.clone())?;
+                let touched_keys = self.extract_touched_ledger_keys(&result.transaction_data);
+
+                // Extract call graph from diagnostic events
+                if !result.events.is_empty() {
+                    parsed.call_graph = self.extract_call_graph(&result.events);
+                }
+
+                if !touched_keys.is_empty() {
+                    parsed.state_dependency = Some(
+                        touched_keys
+                            .iter()
+                            .map(|k| StateDependency {
+                                key: k.clone(),
+                                source: DataSource::Live,
+                            })
+                            .collect(),
+                    );
+
+                    match self
+                        .analyze_ttl_for_touched_entries(
+                            url,
+                            auth_header,
+                            auth_value,
+                            &touched_keys,
+                            result.latest_ledger,
+                        )
+                        .await
+                    {
+                        Ok((ttl_report, snapshot)) => {
+                            if !ttl_report.touched_entries.is_empty() {
+                                parsed.ttl_analysis = Some(ttl_report);
+                            }
+                            parsed.state_snapshot = Some(snapshot);
+                        }
+                        Err(e) => {
+                            tracing::warn!("State analysis skipped due to RPC error: {}", e);
+                        }
+                    }
+                }
+
+                Ok(parsed)
             }
         }
+    }
+
+    fn extract_call_graph(&self, events: &[String]) -> Option<CallGraph> {
+        let mut stack: Vec<CallNode> = Vec::new();
+        let mut root: Option<CallNode> = None;
+
+        for event_b64 in events {
+            let bytes = match BASE64.decode(event_b64) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+
+            let diag_event = match DiagnosticEvent::from_xdr(&bytes, Limits::none()) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            if !diag_event.in_contract_call {
+                continue;
+            }
+
+            let contract_id = match &diag_event.event.contract_id {
+                Some(Hash(h)) => Strkey::Contract(*h).to_string(),
+                None => "Host".to_string(),
+            };
+
+            let (topics, _data) = match &diag_event.event.body {
+                soroban_sdk::xdr::ContractEventBody::V0(v0) => (&v0.topics, &v0.data),
+            };
+
+            if topics.is_empty() {
+                continue;
+            }
+
+            let topic0 = match &topics[0] {
+                ScVal::Symbol(s) => s.to_string(),
+                _ => continue,
+            };
+
+            if topic0 == "fn_call" && topics.len() >= 3 {
+                // Topic 1: Contract Address (ignored since we use event.contract_id)
+                // Topic 2: Function Name
+                let function = match &topics[2] {
+                    ScVal::Symbol(s) => s.to_string(),
+                    _ => "unknown".to_string(),
+                };
+
+                let node = CallNode {
+                    contract_id: contract_id.clone(),
+                    function,
+                    children: Vec::new(),
+                };
+
+                stack.push(node);
+            } else if topic0 == "fn_return" {
+                if let Some(finished_node) = stack.pop() {
+                    if let Some(parent) = stack.last_mut() {
+                        parent.children.push(finished_node);
+                    } else {
+                        root = Some(finished_node);
+                    }
+                }
+            }
+        }
+
+        root.map(|r| CallGraph { root: r })
+    }
+
+    fn extract_touched_ledger_keys(&self, transaction_data: &str) -> Vec<String> {
+        if transaction_data.is_empty() {
+            return Vec::new();
+        }
+
+        let xdr_bytes = match BASE64.decode(transaction_data) {
+            Ok(bytes) => bytes,
+            Err(_) => return Vec::new(),
+        };
+
+        let soroban_data = match SorobanTransactionData::from_xdr(&xdr_bytes, Limits::none()) {
+            Ok(data) => data,
+            Err(_) => return Vec::new(),
+        };
+
+        let mut out = Vec::new();
+        let mut push_key = |key: &LedgerKey| {
+            if let Ok(bytes) = key.to_xdr(Limits::none()) {
+                out.push(BASE64.encode(bytes));
+            }
+        };
+
+        for key in soroban_data.resources.footprint.read_only.iter() {
+            push_key(key);
+        }
+        for key in soroban_data.resources.footprint.read_write.iter() {
+            push_key(key);
+        }
+
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    async fn analyze_ttl_for_touched_entries(
+        &self,
+        url: &str,
+        auth_header: Option<&str>,
+        auth_value: Option<&str>,
+        touched_keys: &[String],
+        latest_ledger: u64,
+    ) -> Result<(TtlAnalysisReport, SimulationStateSnapshot), SimulationError> {
+        let req = GetLedgerEntriesRequest {
+            jsonrpc: "2.0".to_string(),
+            id: 1,
+            method: "getLedgerEntries".to_string(),
+            params: GetLedgerEntriesParams {
+                keys: touched_keys.to_vec(),
+            },
+        };
+
+        let mut req_builder = self.client.post(url).json(&req);
+        if let (Some(header), Some(value)) = (auth_header, auth_value) {
+            req_builder = req_builder.header(header, value);
+        }
+
+        let response = tokio::time::timeout(self.request_timeout, req_builder.send())
+            .await
+            .map_err(|_| SimulationError::NodeTimeout)?
+            .map_err(|e| SimulationError::RpcRequestFailed(format!("Network error: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(SimulationError::RpcRequestFailed(format!(
+                "HTTP error: {}",
+                response.status()
+            )));
+        }
+
+        let rpc_response: GetLedgerEntriesResponse = response.json().await.map_err(|e| {
+            SimulationError::RpcRequestFailed(format!("Failed to parse response: {}", e))
+        })?;
+
+        let entries = match rpc_response.result {
+            LedgerEntriesResponseResult::Success { result } => result.entries,
+            LedgerEntriesResponseResult::Error { error } => {
+                return Err(SimulationError::RpcRequestFailed(format!(
+                    "RPC error {}: {}",
+                    error.code, error.message
+                )))
+            }
+        };
+
+        let mut ledger_entries = HashMap::new();
+        let mut ttl_entries = HashMap::new();
+
+        let touched_entries: Vec<TtlEntryReport> = entries
+            .into_iter()
+            .filter_map(|entry| {
+                if let Some(xdr) = &entry.xdr {
+                    ledger_entries.insert(entry.key.clone(), xdr.clone());
+                }
+                
+                let live_until = entry.live_until_ledger_seq?;
+                ttl_entries.insert(entry.key.clone(), live_until);
+                
+                let remaining = live_until as i64 - latest_ledger as i64;
+                Some(TtlEntryReport {
+                    key: entry.key,
+                    live_until_ledger: live_until,
+                    remaining_ledgers: remaining,
+                })
+            })
+            .collect();
+
+        let extend_ttl_suggestions =
+            Self::build_extend_ttl_suggestions(&touched_entries, latest_ledger);
+
+        Ok((
+            TtlAnalysisReport {
+                current_ledger: latest_ledger,
+                touched_entries,
+                extend_ttl_suggestions,
+            },
+            SimulationStateSnapshot {
+                ledger_entries,
+                ttl_entries,
+                latest_ledger,
+            },
+        ))
+    }
+
+    fn build_extend_ttl_suggestions(
+        touched_entries: &[TtlEntryReport],
+        latest_ledger: u64,
+    ) -> Vec<ExtendTtlSuggestion> {
+        touched_entries
+            .iter()
+            .filter_map(|entry| {
+                if entry.remaining_ledgers > Self::TTL_WARNING_THRESHOLD_LEDGERS {
+                    return None;
+                }
+
+                let target = latest_ledger as i64 + Self::TTL_TARGET_LEDGERS_AHEAD;
+                let extend_to_ledger = target.max(entry.live_until_ledger as i64) as u32;
+                let ledgers_to_extend_by = extend_to_ledger.saturating_sub(entry.live_until_ledger);
+
+                Some(ExtendTtlSuggestion {
+                    key: entry.key.clone(),
+                    current_live_until_ledger: entry.live_until_ledger,
+                    remaining_ledgers: entry.remaining_ledgers,
+                    extend_to_ledger,
+                    ledgers_to_extend_by,
+                    suggested_operation: format!(
+                        "env.storage().persistent().extend_ttl(<key>, {}, {})",
+                        Self::TTL_WARNING_THRESHOLD_LEDGERS,
+                        Self::TTL_TARGET_LEDGERS_AHEAD
+                    ),
+                })
+            })
+            .collect()
     }
 
     fn parse_simulation_result(
@@ -675,6 +1072,7 @@ impl SimulationEngine {
             latest_ledger: rpc_result.latest_ledger,
             cost_stroops,
             state_dependency: None,
+            ttl_analysis: None,
             transaction_data: rpc_result.transaction_data,
         })
     }
@@ -960,11 +1358,207 @@ impl SimulationEngine {
         let final_deps = state_dependency;
 
         result.state_dependency = Some(final_deps);
+Ok(result)
+    }
 
-        Ok(result)
+    // ── Multi-account authorization simulation
+// ── Multi-account authorization simulation ────────────────────────────────
+
+    /// Simulate a contract call requiring authorization from one or more accounts.
+    ///
+    /// # Arguments
+    /// * `contract_id`        - Deployed contract (C...)
+    /// * `function_name`      - Entry-point to invoke
+    /// * `args`               - Function arguments
+    /// * `signers`            - One `AuthSigner` per required signer
+    /// * `network_passphrase` - Stellar network passphrase (e.g. "Test SDF Network ; September 2015")
+    /// * `expiration_ledger`  - Ledger at which auth entries expire
+    pub async fn simulate_with_auth(
+        &self,
+        contract_id: &str,
+        function_name: &str,
+        args: Vec<String>,
+        signers: Vec<AuthSigner>,
+        network_passphrase: &str,
+        expiration_ledger: u32,
+    ) -> Result<SimulationResult, SimulationError> {
+        let contract_hash = self.parse_contract_id(contract_id)?;
+        let contract_address = ScAddress::Contract(Hash(contract_hash));
+        let func_symbol: ScSymbol = function_name
+            .try_into()
+            .map_err(|_| SimulationError::NodeError("Invalid function name".to_string()))?;
+        let sc_args: VecM<ScVal> = args
+            .iter()
+            .map(|a| self.parse_sc_val_arg(a))
+            .collect::<Result<Vec<_>, _>>()?
+            .try_into()
+            .map_err(|_| SimulationError::NodeError("Too many arguments".to_string()))?;
+
+        // Build the root invocation shared across all auth entries
+        let root_invocation = Self::build_root_invocation(
+            contract_address.clone(),
+            func_symbol.clone(),
+            sc_args.clone(),
+        );
+
+        // Collect and sign auth entries for every signer
+        let auth_entries = self.collect_auth_entries(
+            &signers,
+            &root_invocation,
+            network_passphrase,
+            expiration_ledger,
+        )?;
+        result.ttl_analysis = None;
+
+        tracing::info!(
+            signers = signers.len(),
+            auth_entries = auth_entries.len(),
+            "Simulating with multi-account authorization"
+        );
+
+        let host_function = HostFunction::InvokeContract(InvokeContractArgs {
+            contract_address,
+            function_name: func_symbol,
+            args: sc_args,
+        });
+
+        let transaction_xdr =
+            self.build_invoke_host_function_transaction(host_function, auth_entries)?;
+        self.simulate_transaction(&transaction_xdr).await
+    }
+
+    /// Build a `SorobanAuthorizedInvocation` for the given contract call.
+    fn build_root_invocation(
+        contract_address: ScAddress,
+        function_name: ScSymbol,
+        args: VecM<ScVal>,
+    ) -> SorobanAuthorizedInvocation {
+        SorobanAuthorizedInvocation {
+            function: SorobanAuthorizedFunction::ContractFn(InvokeContractArgs {
+                contract_address,
+                function_name,
+                args,
+            }),
+            sub_invocations: VecM::default(),
+        }
+    }
+
+    /// Convert a slice of `AuthSigner` values into ready-to-inject
+    /// `SorobanAuthorizationEntry` objects.
+    pub fn collect_auth_entries(
+        &self,
+        signers: &[AuthSigner],
+        root_invocation: &SorobanAuthorizedInvocation,
+        network_passphrase: &str,
+        expiration_ledger: u32,
+    ) -> Result<Vec<SorobanAuthorizationEntry>, SimulationError> {
+        signers
+            .iter()
+            .map(|signer| match signer {
+                AuthSigner::PreSignedXdr { xdr } => {
+                    let bytes = BASE64
+                        .decode(xdr)
+                        .map_err(SimulationError::Base64Error)?;
+                    SorobanAuthorizationEntry::from_xdr(&bytes, Limits::none()).map_err(|e| {
+                        SimulationError::XdrError(format!("Invalid auth entry XDR: {e}"))
+                    })
+                }
+                AuthSigner::SecretKey { secret } => self.sign_auth_entry(
+                    secret,
+                    root_invocation,
+                    network_passphrase,
+                    expiration_ledger,
+                ),
+            })
+            .collect()
+    }
+
+    /// Parse a Stellar secret key, build a `SorobanAuthorizationEntry`,
+    /// sign the auth preimage with ed25519, and return the completed entry.
+    pub fn sign_auth_entry(
+        &self,
+        secret: &str,
+        invocation: &SorobanAuthorizedInvocation,
+        network_passphrase: &str,
+        expiration_ledger: u32,
+    ) -> Result<SorobanAuthorizationEntry, SimulationError> {
+        use ed25519_dalek::SigningKey;
+
+        // 1. Parse the Stellar secret key (S...)
+        let strkey = Strkey::from_string(secret)
+            .map_err(|e| SimulationError::NodeError(format!("Invalid secret key: {e}")))?;
+        let seed = match strkey {
+            Strkey::PrivateKeyEd25519(sk) => sk.0,
+            _ => {
+                return Err(SimulationError::NodeError(
+                    "Expected S... secret key".to_string(),
+                ))
+            }
+        };
+        let signing_key = SigningKey::from_bytes(&seed);
+        let public_key = signing_key.verifying_key().to_bytes();
+
+        // 2. Derive a deterministic nonce: sha256(pubkey || invocation_xdr)[0..8]
+        let invocation_xdr = invocation
+            .to_xdr(Limits::none())
+            .map_err(|e| SimulationError::XdrError(format!("Encode invocation: {e}")))?;
+        let nonce_input = [&public_key[..], &invocation_xdr[..]].concat();
+        let nonce_hash = Sha256::digest(&nonce_input);
+        let nonce = i64::from_be_bytes(nonce_hash[..8].try_into().unwrap());
+
+        // 3. Compute the network id
+        let network_id: [u8; 32] = Sha256::digest(network_passphrase.as_bytes()).into();
+
+        // 4. Build and hash the auth preimage
+        let preimage =
+            HashIdPreimage::SorobanAuthorization(HashIdPreimageSorobanAuthorization {
+                network_id: Hash(network_id),
+                invocation: invocation.clone(),
+                nonce,
+                signature_expiration_ledger: expiration_ledger,
+            });
+        let preimage_bytes = preimage
+            .to_xdr(Limits::none())
+            .map_err(|e| SimulationError::XdrError(format!("Encode preimage: {e}")))?;
+        let auth_hash: [u8; 32] = Sha256::digest(&preimage_bytes).into();
+
+        // 5. Sign the hash with ed25519
+        let signature: [u8; 64] = signing_key.sign(&auth_hash).to_bytes();
+
+        // 6. Build the Soroban signature map: { pubkey_bytes => sig_bytes }
+        let sig_map = ScVal::Map(Some(
+            vec![ScMapEntry {
+                key: ScVal::Bytes(
+                    public_key
+                        .to_vec()
+                        .try_into()
+                        .map_err(|_| SimulationError::XdrError("pubkey bytes".into()))?,
+                ),
+                val: ScVal::Bytes(
+                    signature
+                        .to_vec()
+                        .try_into()
+                        .map_err(|_| SimulationError::XdrError("sig bytes".into()))?,
+                ),
+            }]
+            .try_into()
+            .map_err(|_| SimulationError::XdrError("sig map".into()))?,
+        ));
+
+        // 7. Assemble the final auth entry
+        Ok(SorobanAuthorizationEntry {
+            credentials: SorobanCredentials::Address(SorobanAddressCredentials {
+                address: ScAddress::Account(AccountId(PublicKey::PublicKeyTypeEd25519(
+                    Uint256(public_key),
+                ))),
+                nonce,
+                signature_expiration_ledger: expiration_ledger,
+                signature: sig_map,
+            }),
+            root_invocation: invocation.clone(),
+        })
     }
 }
-
 // ── Local WASM profiling ──────────────────────────────────────────────────────
 
 /// Profile a contract from raw WASM bytes using a local Soroban test environment.
@@ -1375,6 +1969,7 @@ mod tests {
                 latest_ledger: 42,
                 cost_stroops: 10,
                 state_dependency: None,
+                ttl_analysis: None,
                 transaction_data: "AAA=".to_string(),
             }
         }
@@ -1483,5 +2078,136 @@ mod tests {
             let deserialized: AuthSigner = serde_json::from_str(&json).unwrap();
             assert_eq!(signer, deserialized);
         }
+    }
+    // ── Multi-auth tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_build_root_invocation_structure() {
+        use soroban_sdk::xdr::SorobanAuthorizedFunction;
+
+        let contract_hash = [1u8; 32];
+        let addr = ScAddress::Contract(Hash(contract_hash));
+        let sym: ScSymbol = "transfer".try_into().unwrap();
+        let args: VecM<ScVal> = vec![ScVal::Bool(true)].try_into().unwrap();
+
+        let inv = SimulationEngine::build_root_invocation(addr, sym.clone(), args);
+
+        match &inv.function {
+            SorobanAuthorizedFunction::ContractFn(f) => {
+                assert_eq!(f.function_name, sym);
+            }
+            _ => panic!("unexpected function type"),
+        }
+        assert_eq!(inv.sub_invocations.len(), 0);
+    }
+
+    #[test]
+    fn test_collect_auth_entries_invalid_base64_is_rejected() {
+        let engine = SimulationEngine::new("https://test.com".to_string());
+        let signers = vec![AuthSigner::PreSignedXdr {
+            xdr: "!!!not-base64!!!".to_string(),
+        }];
+        let dummy_inv = SimulationEngine::build_root_invocation(
+            ScAddress::Contract(Hash([0u8; 32])),
+            "fn".try_into().unwrap(),
+            VecM::default(),
+        );
+        let result = engine.collect_auth_entries(&signers, &dummy_inv, "Test", 1000);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_collect_auth_entries_invalid_xdr_is_rejected() {
+        let engine = SimulationEngine::new("https://test.com".to_string());
+        // valid base64 but not a SorobanAuthorizationEntry
+        let bad_xdr = BASE64.encode(b"this is not valid xdr");
+        let signers = vec![AuthSigner::PreSignedXdr { xdr: bad_xdr }];
+        let dummy_inv = SimulationEngine::build_root_invocation(
+            ScAddress::Contract(Hash([0u8; 32])),
+            "fn".try_into().unwrap(),
+            VecM::default(),
+        );
+        let result = engine.collect_auth_entries(&signers, &dummy_inv, "Test", 1000);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sign_auth_entry_invalid_secret_rejected() {
+        let engine = SimulationEngine::new("https://test.com".to_string());
+        let dummy_inv = SimulationEngine::build_root_invocation(
+            ScAddress::Contract(Hash([0u8; 32])),
+            "fn".try_into().unwrap(),
+            VecM::default(),
+        );
+        let result = engine.sign_auth_entry("NOT_A_SECRET", &dummy_inv, "Test Network", 1000);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sign_auth_entry_wrong_key_type_rejected() {
+        let engine = SimulationEngine::new("https://test.com".to_string());
+        let dummy_inv = SimulationEngine::build_root_invocation(
+            ScAddress::Contract(Hash([0u8; 32])),
+            "fn".try_into().unwrap(),
+            VecM::default(),
+        );
+        // G... address is a public key, not a secret — must be rejected
+        let result = engine.sign_auth_entry(
+            "GABC1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCDEFG",
+            &dummy_inv,
+            "Test Network",
+            1000,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_empty_signers_produces_empty_auth_entries() {
+        let engine = SimulationEngine::new("https://test.com".to_string());
+        let dummy_inv = SimulationEngine::build_root_invocation(
+            ScAddress::Contract(Hash([0u8; 32])),
+            "fn".try_into().unwrap(),
+            VecM::default(),
+        );
+        let result = engine
+            .collect_auth_entries(&[], &dummy_inv, "Test Network", 1000)
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_auth_signer_serialization() {
+        let signer = AuthSigner::SecretKey {
+            secret: "STEST".to_string(),
+        };
+        let json = serde_json::to_string(&signer).unwrap();
+        assert!(json.contains("secret_key"));
+        assert!(json.contains("STEST"));
+
+        let signer2 = AuthSigner::PreSignedXdr {
+            xdr: "AAAA".to_string(),
+        };
+        let json2 = serde_json::to_string(&signer2).unwrap();
+        assert!(json2.contains("pre_signed_xdr"));
+
+    #[test]
+    fn test_build_extend_ttl_suggestions_flags_low_ttl_entries() {
+        let entries = vec![
+            TtlEntryReport {
+                key: "key-a".to_string(),
+                live_until_ledger: 1_000,
+                remaining_ledgers: 500,
+            },
+            TtlEntryReport {
+                key: "key-b".to_string(),
+                live_until_ledger: 500_000,
+                remaining_ledgers: 200_000,
+            },
+        ];
+
+        let suggestions = SimulationEngine::build_extend_ttl_suggestions(&entries, 500);
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].key, "key-a");
+        assert!(suggestions[0].ledgers_to_extend_by > 0);
     }
 }
