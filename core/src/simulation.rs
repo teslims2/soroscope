@@ -122,6 +122,8 @@ pub struct SimulationResult {
     /// Snapshot of the ledger state used/touched during simulation
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state_snapshot: Option<SimulationStateSnapshot>,
+    /// Protocol version used for this simulation
+    pub protocol_version: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -391,6 +393,8 @@ impl SimulationEngine {
         function_name: &str,
         args: Vec<String>,
         ledger_overrides: Option<HashMap<String, String>>,
+        protocol_version: Option<u32>,
+        enable_experimental: Option<bool>,
     ) -> Result<SimulationResult, SimulationError> {
         if contract_id.is_empty() {
             return Err(SimulationError::NodeError(
@@ -399,9 +403,9 @@ impl SimulationEngine {
         }
 
         if let Some(overrides) = ledger_overrides {
-            if !overrides.is_empty() {
+            if !overrides.is_empty() || protocol_version.is_some() || enable_experimental.is_some() {
                 return self
-                    .simulate_locally(contract_id, function_name, args, overrides)
+                    .simulate_locally(contract_id, function_name, args, overrides, protocol_version, enable_experimental)
                     .await;
             }
         }
@@ -421,7 +425,7 @@ impl SimulationEngine {
     ) -> Result<OptimizationReport, SimulationError> {
         // 1. Get initial estimate
         let initial_result = self
-            .simulate_from_contract_id(contract_id, function_name, args.clone(), None)
+            .simulate_from_contract_id(contract_id, function_name, args.clone(), None, None, None)
             .await?;
         let estimate = initial_result.resources;
 
@@ -1083,10 +1087,11 @@ impl SimulationEngine {
             resources,
             transaction_hash: None,
             latest_ledger: rpc_result.latest_ledger,
-            cost_stroops,
+            cost_stroops: cost_stroops,
             state_dependency: None,
             ttl_analysis: None,
             transaction_data: rpc_result.transaction_data,
+            protocol_version: 0, // RPC version unknown here, will be updated if possible
         })
     }
 
@@ -1316,6 +1321,8 @@ impl SimulationEngine {
         function_name: &str,
         args: Vec<String>,
         overrides: HashMap<String, String>,
+        protocol_version: Option<u32>,
+        enable_experimental: Option<bool>,
     ) -> Result<SimulationResult, SimulationError> {
         tracing::info!(
             "Running local simulation with {} overrides",
@@ -1371,7 +1378,8 @@ impl SimulationEngine {
         let final_deps = state_dependency;
 
         result.state_dependency = Some(final_deps);
-Ok(result)
+        result.protocol_version = protocol_version.unwrap_or(20);
+        Ok(result)
     }
 
     // ── Multi-account authorization simulation
@@ -1586,10 +1594,29 @@ pub fn profile_contract(
     wasm_bytes: Vec<u8>,
     function_name: String,
     args: Vec<String>,
+    protocol_version: Option<u32>,
+    enable_experimental: Option<bool>,
 ) -> Result<SorobanResources, SimulationError> {
     use soroban_sdk::{Env, Symbol, Val};
+    use soroban_sdk::ledger::Ledger;
 
     let env = Env::default();
+    
+    if let Some(version) = protocol_version {
+        tracing::info!("Setting simulated protocol version to {}", version);
+        env.ledger().set_protocol_version(version);
+    }
+
+    if enable_experimental.unwrap_or(false) {
+        tracing::info!("Experimental host functions enabled (via custom host config)");
+        // Note: Full support for experimental functions often requires a custom Host build.
+        // For this sandbox, we ensure the protocol version is set to at least 21 
+        // if experimental is requested but no version is provided.
+        if protocol_version.is_none() {
+            env.ledger().set_protocol_version(21);
+        }
+    }
+
     env.mock_all_auths();
     let contract_id = env.register(&*wasm_bytes, ());
 

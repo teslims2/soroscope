@@ -209,6 +209,10 @@ pub struct AnalyzeRequest {
     pub args: Option<Vec<String>>,
     /// Map of Key-Base64 to Value-Base64 ledger entry overrides
     pub ledger_overrides: Option<HashMap<String, String>>,
+    /// Protocol version to simulate (e.g. 21)
+    pub protocol_version: Option<u32>,
+    /// Whether to enable experimental host functions
+    pub enable_experimental: Option<bool>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -249,6 +253,9 @@ pub struct ResourceReport {
     /// Snapshot of the ledger state used/touched during simulation
     #[schema(description = "Snapshot of the ledger state used/touched during simulation")]
     pub state_snapshot: Option<crate::simulation::SimulationStateSnapshot>,
+    /// Protocol version used for this simulation
+    #[schema(example = 20)]
+    pub protocol_version: u32,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -393,6 +400,10 @@ pub struct AnalyzeWasmRequest {
     /// Optional function arguments (void | true | false | integers | symbols).
     #[schema(example = "[]")]
     pub args: Option<Vec<String>>,
+    /// Protocol version to simulate (e.g. 21)
+    pub protocol_version: Option<u32>,
+    /// Whether to enable experimental host functions
+    pub enable_experimental: Option<bool>,
 }
 
 /// Convert a `SimulationResult` (library type) into the API `ResourceReport`.
@@ -454,6 +465,7 @@ fn to_report(result: &SimulationResult, insights_engine: &InsightsEngine) -> Res
         call_graph: result.call_graph.clone(),
         call_graph_mermaid: result.call_graph.as_ref().map(|g| g.to_mermaid()),
         state_snapshot: result.state_snapshot.clone(),
+        protocol_version: result.protocol_version,
     }
 }
 
@@ -507,6 +519,8 @@ async fn analyze(
                     &payload.function_name,
                     args,
                     payload.ledger_overrides.clone(),
+                    payload.protocol_version,
+                    payload.enable_experimental,
                 ),
             )
             .await
@@ -589,7 +603,7 @@ async fn analyze_wasm(
     let args = payload.args.clone().unwrap_or_default();
 
     let resources = tokio::task::spawn_blocking(move || {
-        simulation::profile_contract(wasm_bytes, function_name, args)
+        simulation::profile_contract(wasm_bytes, function_name, args, payload.protocol_version, payload.enable_experimental)
     })
     .await
     .map_err(|e| AppError::Internal(format!("Contract profiling task panicked: {}", e)))?
@@ -603,6 +617,7 @@ async fn analyze_wasm(
         state_dependency: None,
         ttl_analysis: None,
         transaction_data: String::new(),
+        protocol_version: payload.protocol_version.unwrap_or(20),
     };
 
     Ok(Json(to_report(&sim_result, &state.insights_engine)))
