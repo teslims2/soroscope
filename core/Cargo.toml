@@ -6,6 +6,7 @@ edition = "2021"
 [lib]
 name = "soroscope_core"
 path = "src/lib.rs"
+crate-type = ["rlib"]
 
 [dependencies]
 soroban-sdk = { version = "22.0.0", features = ["testutils"] }
@@ -15,7 +16,7 @@ soroban-sdk = { version = "22.0.0", features = ["testutils"] }
 soroban-env-host = { version = "22", features = ["testutils"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.29", features = ["bundled"] }
 serde_json = "1.0"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sha2 = "0.10"
@@ -38,7 +39,7 @@ ed25519-dalek = "1"
 rand = "0.8"
 moka = { version = "0.12", features = ["future"] }
 sled = "0.34"
-sqlx = { version = "0.7", features = ["runtime-tokio", "tls-native-tls", "postgres", "sqlite", "uuid", "chrono", "migrate"] }
+sqlx = { version = "0.7", features = ["runtime-tokio", "tls-native-tls", "postgres", "uuid", "chrono", "migrate"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
