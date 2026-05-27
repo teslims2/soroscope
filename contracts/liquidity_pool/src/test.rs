@@ -2,7 +2,7 @@ use super::*;
 use soroban_sdk::{
     contract, contractimpl, contracttype,
     testutils::{Address as _, Events, Ledger},
-    Address, Env, String as SorobanString, TryIntoVal,
+    vec, Address, Env, String as SorobanString, TryIntoVal,
 };
 
 // Import Vec from alloc for no_std environment
@@ -766,11 +766,14 @@ fn test_pause_and_unpause() {
     let shares = client.deposit(&user, &1000, &1000);
     assert_eq!(shares, 1000);
 
-    // Admin pauses the contract
-    client.set_paused(&true);
+    // Admin pauses deposits only.
+    client.guard_pause(&admin, &emergency_guard::PauseType::DEPOSIT, &true);
+    assert!(client.guard_is_paused(&emergency_guard::PauseType::DEPOSIT));
+    assert!(!client.guard_is_paused(&emergency_guard::PauseType::SWAP));
 
-    // Unpause the contract
-    client.set_paused(&false);
+    // Unpause deposits.
+    client.guard_pause(&admin, &emergency_guard::PauseType::DEPOSIT, &false);
+    assert!(!client.guard_is_paused(&emergency_guard::PauseType::DEPOSIT));
 
     // Operations should work again
     token_a_admin.mint(&user, &500);
@@ -780,7 +783,7 @@ fn test_pause_and_unpause() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #14)")]
+#[should_panic(expected = "Error(Contract, #9)")]
 fn test_deposit_when_paused() {
     let e = Env::default();
     e.mock_all_auths();
@@ -809,15 +812,15 @@ fn test_deposit_when_paused() {
     token_a_admin.mint(&user, &1000);
     token_b_admin.mint(&user, &1000);
 
-    // Pause the contract
-    client.set_paused(&true);
+    // Pause deposits only.
+    client.guard_pause(&admin, &emergency_guard::PauseType::DEPOSIT, &true);
 
     // Try to deposit - should panic with Paused error
     client.deposit(&user, &1000, &1000);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #14)")]
+#[should_panic(expected = "Error(Contract, #9)")]
 fn test_swap_when_paused() {
     let e = Env::default();
     e.mock_all_auths();
@@ -847,15 +850,15 @@ fn test_swap_when_paused() {
     token_b_admin.mint(&user, &2000);
     client.deposit(&user, &1000, &1000);
 
-    // Pause the contract
-    client.set_paused(&true);
+    // Pause swaps only.
+    client.guard_pause(&admin, &emergency_guard::PauseType::SWAP, &true);
 
     // Try to swap - should panic with Paused error
     client.swap(&user, &false, &100, &200);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #14)")]
+#[should_panic(expected = "Error(Contract, #9)")]
 fn test_withdraw_when_paused() {
     let e = Env::default();
     e.mock_all_auths();
@@ -885,8 +888,8 @@ fn test_withdraw_when_paused() {
     token_b_admin.mint(&user, &1000);
     let shares = client.deposit(&user, &1000, &1000);
 
-    // Pause the contract
-    client.set_paused(&true);
+    // Pause withdrawals only.
+    client.guard_pause(&admin, &emergency_guard::PauseType::WITHDRAW, &true);
 
     // Try to withdraw - should panic with Paused error
     client.withdraw(&user, &shares);
