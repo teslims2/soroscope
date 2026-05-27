@@ -113,4 +113,12 @@ impl TokenTrait for Token {
     fn symbol(e: Env) -> String {
         read_symbol(&e)
     }
+
+    fn guard_pause(e: Env, admin: Address, operation: u32, paused: bool) -> Result<(), GuardError> {
+        EmergencyGuard::set_pause(e, admin, operation, paused)
+    }
+
+    fn guard_unpause(e: Env, approvers: Vec<Address>) -> Result<(), GuardError> {
+        EmergencyGuard::resume(e, approvers)
+    }
 }
