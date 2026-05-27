@@ -35,6 +35,12 @@ impl TokenTrait for Token {
         write_administrator(&e, &admin);
         // One write instead of three separate writes for name/symbol/decimals.
         write_metadata(&e, &name, &symbol, decimal);
+        
+        // Initialize emergency guard with single admin and threshold of 1
+        let admins = vec![&e, admin.clone()];
+        let threshold = 1;
+        EmergencyGuard::initialize(e, admins, threshold)
+            .expect("Failed to initialize emergency guard");
     }
 
     fn mint(e: Env, to: Address, amount: i128) {
