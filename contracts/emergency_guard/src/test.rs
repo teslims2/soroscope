@@ -81,6 +81,16 @@ fn test_multiple_pause_types() {
     assert!(!pause.is_paused(crate::PauseType::BURN));
 }
 
+#[test]
+fn test_pause_type_as_u32_bitmask() {
+    let mut pause = crate::PauseType::new(0);
+    pause.set_paused(crate::PauseType::SWAP, true);
+    pause.set_paused(crate::PauseType::DEPOSIT, true);
+    assert_eq!(
+        pause.as_u32(),
+        crate::PauseType::SWAP | crate::PauseType::DEPOSIT
+    );
+}
 
 #[test]
 fn test_event_emission_for_guard_actions() {
