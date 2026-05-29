@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 [dependencies]
 emergency_guard = { path = "../emergency_guard" }
 soroban-sdk = "22.0.0"
+# Emergency guard provides standardized pause and admin management capabilities
 
 [dev-dependencies]
 soroban-sdk = { version = "22.0.0", features = ["testutils"] }

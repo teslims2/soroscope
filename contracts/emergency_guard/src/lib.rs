@@ -72,8 +72,6 @@ pub enum GuardError {
     AlreadyInitialized = 6,
 }
 
-
-
 /// Result type for guard operations
 // Result type for guard operations replaced inline
 
@@ -157,7 +155,12 @@ impl EmergencyGuard {
     }
 
     /// Set pause state for a specific operation (any single admin can do this)
-    pub fn set_pause(env: Env, admin: Address, operation: u32, paused: bool) -> Result<(), GuardError> {
+    pub fn set_pause(
+        env: Env,
+        admin: Address,
+        operation: u32,
+        paused: bool,
+    ) -> Result<(), GuardError> {
         admin.require_auth();
 
         // Check if caller is admin
@@ -219,7 +222,11 @@ impl EmergencyGuard {
     }
 
     /// Add new admin (multi-sig required)
-    pub fn add_admin(env: Env, approvers: Vec<Address>, new_admin: Address) -> Result<(), GuardError> {
+    pub fn add_admin(
+        env: Env,
+        approvers: Vec<Address>,
+        new_admin: Address,
+    ) -> Result<(), GuardError> {
         Self::check_multi_sig(&env, &approvers)?;
 
         let mut admins = Self::get_admins(env.clone());
@@ -236,7 +243,11 @@ impl EmergencyGuard {
     }
 
     /// Remove admin (multi-sig required)
-    pub fn remove_admin(env: Env, approvers: Vec<Address>, admin: Address) -> Result<(), GuardError> {
+    pub fn remove_admin(
+        env: Env,
+        approvers: Vec<Address>,
+        admin: Address,
+    ) -> Result<(), GuardError> {
         Self::check_multi_sig(&env, &approvers)?;
 
         let admins = Self::get_admins(env.clone());
