@@ -1,9 +1,10 @@
 use crate::errors::AppError;
 use axum::{extract::Request, http::header, middleware::Next, response::Response, Extension, Json};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{engine::general_purpose::STANDARD as BASE64, engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL, Engine};
 use ed25519_dalek::{Signature as Ed25519Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use rand::RngCore;
+use rsa::{pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey}, RsaPrivateKey, RsaPublicKey, traits::PublicKeyParts};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use soroban_sdk::xdr::{
@@ -22,7 +23,10 @@ const JWT_EXPIRY_SECS: u64 = 86400;
 const WEB_AUTH_DOMAIN: &str = "soroscope";
 
 pub struct AuthState {
-    pub jwt_secret: String,
+    pub encoding_key: EncodingKey,
+    pub decoding_key: DecodingKey,
+    pub jwk_n: String,
+    pub jwk_e: String,
     pub signing_key: SigningKey,
     pub server_public_key: [u8; 32],
     pub network_passphrase: String,
@@ -33,22 +37,44 @@ pub struct AuthState {
 
 impl AuthState {
     pub fn new(
-        jwt_secret: String,
+        jwt_private_key_pem: Option<String>,
         sep10_seed: Option<[u8; 32]>,
         network_passphrase: String,
         emergency_verification_paused: bool,
     ) -> Self {
-        let signing_key = match sep10_seed {
-            Some(seed) => SigningKey::from_bytes(&seed),
+        let seed = match sep10_seed {
+            Some(seed) => seed,
             None => {
                 let mut seed = [0u8; 32];
                 rand::thread_rng().fill_bytes(&mut seed);
-                SigningKey::from_bytes(&seed)
+                seed
             }
         };
         let server_public_key = signing_key.verifying_key().to_bytes();
+
+        let priv_key = if let Some(pem) = jwt_private_key_pem {
+            RsaPrivateKey::from_pkcs8_pem(&pem).expect("Invalid RSA Private Key PEM")
+        } else {
+            tracing::info!("Generating ephemeral RSA keypair for local development...");
+            let mut rng = rand::thread_rng();
+            RsaPrivateKey::new(&mut rng, 2048).expect("Failed to generate RSA key")
+        };
+
+        let pem_str = priv_key.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF).unwrap();
+        let encoding_key = EncodingKey::from_rsa_pem(pem_str.as_bytes()).unwrap();
+
+        let pub_key = RsaPublicKey::from(&priv_key);
+        let pub_pem = pub_key.to_public_key_pem(rsa::pkcs8::LineEnding::LF).unwrap();
+        let decoding_key = DecodingKey::from_rsa_pem(pub_pem.as_bytes()).unwrap();
+
+        let n = BASE64_URL.encode(pub_key.n().to_bytes_be());
+        let e = BASE64_URL.encode(pub_key.e().to_bytes_be());
+
         Self {
-            jwt_secret,
+            encoding_key,
+            decoding_key,
+            jwk_n: n,
+            jwk_e: e,
             signing_key,
             server_public_key,
             network_passphrase,
@@ -114,6 +140,7 @@ struct Claims {
     iss: String,
     exp: u64,
     iat: u64,
+    scopes: Vec<String>,
 }
 
 fn now_secs() -> u64 {
@@ -295,12 +322,12 @@ fn verify_challenge_envelope(state: &AuthState, signed_xdr_b64: &str) -> Result<
 
     for ds in sigs {
         let sig_bytes: &[u8] = ds.signature.as_ref();
-        let Ok(sig) = Ed25519Signature::from_slice(sig_bytes) else {
+        let Ok(sig) = Ed25519Signature::from_bytes(sig_bytes) else {
             continue;
         };
 
         if ds.hint.0 == server_hint {
-            if let Ok(vk) = VerifyingKey::from_bytes(&state.server_public_key) {
+            if let Ok(vk) = PublicKey::from_bytes(&state.server_public_key) {
                 if vk.verify(&hash, &sig).is_ok() {
                     server_ok = true;
                 }
@@ -308,7 +335,7 @@ fn verify_challenge_envelope(state: &AuthState, signed_xdr_b64: &str) -> Result<
         }
 
         if ds.hint.0 == client_hint {
-            if let Ok(vk) = VerifyingKey::from_bytes(&client_key) {
+            if let Ok(vk) = PublicKey::from_bytes(&client_key) {
                 if vk.verify(&hash, &sig).is_ok() {
                     client_ok = true;
                 }
@@ -335,12 +362,14 @@ fn verify_challenge_envelope(state: &AuthState, signed_xdr_b64: &str) -> Result<
         iss: WEB_AUTH_DOMAIN.to_string(),
         iat: now,
         exp: now + JWT_EXPIRY_SECS,
+        scopes: vec!["simulate".to_string()],
     };
 
+    let header = Header::new(Algorithm::RS256);
     encode(
-        &Header::default(),
+        &header,
         &claims,
-        &EncodingKey::from_secret(state.jwt_secret.as_bytes()),
+        &state.encoding_key,
     )
     .map_err(|e| AppError::Internal(format!("JWT encode error: {e}")))
 }
@@ -459,12 +488,56 @@ pub async fn auth_middleware(
         .strip_prefix("Bearer ")
         .ok_or_else(|| AppError::Unauthorized("Expected Bearer token".into()))?;
 
-    decode::<Claims>(
+    let validation = Validation::new(Algorithm::RS256);
+    let token_data = decode::<Claims>(
         token,
-        &DecodingKey::from_secret(state.jwt_secret.as_bytes()),
-        &Validation::default(),
+        &state.decoding_key,
+        &validation,
     )
     .map_err(|e| AppError::Unauthorized(format!("Invalid token: {e}")))?;
 
+    if !token_data.claims.scopes.contains(&"simulate".to_string()) {
+        return Err(AppError::Unauthorized("Missing required scope 'simulate'".into()));
+    }
+
     Ok(next.run(req).await)
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct JwkSetResponse {
+    pub keys: Vec<JwkResponse>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct JwkResponse {
+    pub kty: String,
+    pub alg: String,
+    pub kid: String,
+    pub n: String,
+    pub e: String,
+    #[serde(rename = "use")]
+    pub use_: String,
+}
+
+#[utoipa::path(
+    get,
+    path = "/auth/jwks",
+    responses(
+        (status = 200, description = "JSON Web Key Set", body = JwkSetResponse)
+    ),
+    tag = "Auth"
+)]
+pub async fn jwks_handler(
+    Extension(state): Extension<Arc<AuthState>>,
+) -> Result<Json<JwkSetResponse>, AppError> {
+    Ok(Json(JwkSetResponse {
+        keys: vec![JwkResponse {
+            kty: "RSA".to_string(),
+            alg: "RS256".to_string(),
+            kid: "1".to_string(),
+            n: state.jwk_n.clone(),
+            e: state.jwk_e.clone(),
+            use_: "sig".to_string(),
+        }],
+    }))
 }

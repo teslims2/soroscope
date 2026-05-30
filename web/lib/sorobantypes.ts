@@ -19,6 +19,7 @@ export interface InvocationResult {
   inputs: Record<string, any>;
   result?: any;
   error?: string;
+  errorType?: string; // Error type from backend (e.g., BAD_REQUEST, INTERNAL_SERVER_ERROR)
   resourceCost?: {
     fee?: string;
     cpu_instructions: number;
@@ -27,8 +28,27 @@ export interface InvocationResult {
     ledger_write_bytes: number;
     transaction_size_bytes: number;
   };
+  callGraph?: CallGraph;
+  callGraphMermaid?: string;
+  stateSnapshot?: SimulationStateSnapshot;
   timestamp: number;
   success: boolean;
+}
+
+export interface CallNode {
+  contract_id: string;
+  function: string;
+  children: CallNode[];
+}
+
+export interface CallGraph {
+  root: CallNode;
+}
+
+export interface SimulationStateSnapshot {
+  ledger_entries: Record<string, string>;
+  ttl_entries: Record<string, number>;
+  latest_ledger: number;
 }
 
 // Mock contract functions for demo
