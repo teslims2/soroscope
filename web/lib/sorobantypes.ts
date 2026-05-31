@@ -22,6 +22,7 @@ export interface InvocationResult {
   errorType?: string; // Error type from backend (e.g., BAD_REQUEST, INTERNAL_SERVER_ERROR)
   resourceCost?: {
     fee?: string;
+    cost_stroops?: number;
     cpu_instructions: number;
     ram_bytes: number;
     ledger_read_bytes: number;
