@@ -1,7 +1,8 @@
 use super::*;
 use soroban_sdk::{
+    contract, contractimpl, contracttype,
     testutils::{Address as _, Events, Ledger},
-    contract, contractimpl, contracttype, Address, Env, String as SorobanString, TryIntoVal,
+    vec, Address, Env, String as SorobanString, TryIntoVal,
 };
 
 // Import Vec from alloc for no_std environment
@@ -114,7 +115,7 @@ fn test_double_initialization() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #2)")]
+#[should_panic(expected = "Error(Contract, #5)")]
 fn test_swap_insufficient_liquidity() {
     let e = Env::default();
     e.mock_all_auths();
@@ -149,7 +150,7 @@ fn test_swap_insufficient_liquidity() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3)")]
+#[should_panic(expected = "Error(Contract, #8)")]
 fn test_swap_slippage_exceeded() {
     let e = Env::default();
     e.mock_all_auths();
@@ -184,7 +185,7 @@ fn test_swap_slippage_exceeded() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #4)")]
+#[should_panic(expected = "Error(Contract, #6)")]
 fn test_withdraw_insufficient_shares() {
     let e = Env::default();
     e.mock_all_auths();
@@ -303,7 +304,7 @@ fn test_transfer() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "Error(Contract, #4)")]
 fn test_transfer_insufficient_balance() {
     let e = Env::default();
     e.mock_all_auths();
@@ -647,7 +648,7 @@ fn test_transfer_from() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #10)")]
+#[should_panic(expected = "Error(Contract, #7)")]
 fn test_transfer_from_insufficient_allowance() {
     let e = Env::default();
     e.mock_all_auths();
@@ -688,7 +689,7 @@ fn test_transfer_from_insufficient_allowance() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "Error(Contract, #4)")]
 fn test_transfer_from_insufficient_balance() {
     let e = Env::default();
     e.mock_all_auths();
@@ -765,11 +766,14 @@ fn test_pause_and_unpause() {
     let shares = client.deposit(&user, &1000, &1000);
     assert_eq!(shares, 1000);
 
-    // Admin pauses the contract
-    client.set_paused(&true);
+    // Admin pauses deposits only.
+    client.guard_pause(&admin, &emergency_guard::PauseType::DEPOSIT, &true);
+    assert!(client.guard_is_paused(&emergency_guard::PauseType::DEPOSIT));
+    assert!(!client.guard_is_paused(&emergency_guard::PauseType::SWAP));
 
-    // Unpause the contract
-    client.set_paused(&false);
+    // Unpause deposits.
+    client.guard_pause(&admin, &emergency_guard::PauseType::DEPOSIT, &false);
+    assert!(!client.guard_is_paused(&emergency_guard::PauseType::DEPOSIT));
 
     // Operations should work again
     token_a_admin.mint(&user, &500);
@@ -779,7 +783,7 @@ fn test_pause_and_unpause() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #9)")]
+#[should_panic(expected = "Error(Contract, #14)")]
 fn test_deposit_when_paused() {
     let e = Env::default();
     e.mock_all_auths();
@@ -808,15 +812,15 @@ fn test_deposit_when_paused() {
     token_a_admin.mint(&user, &1000);
     token_b_admin.mint(&user, &1000);
 
-    // Pause the contract
-    client.set_paused(&true);
+    // Pause deposits only.
+    client.guard_pause(&admin, &emergency_guard::PauseType::DEPOSIT, &true);
 
     // Try to deposit - should panic with Paused error
     client.deposit(&user, &1000, &1000);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #9)")]
+#[should_panic(expected = "Error(Contract, #14)")]
 fn test_swap_when_paused() {
     let e = Env::default();
     e.mock_all_auths();
@@ -846,15 +850,15 @@ fn test_swap_when_paused() {
     token_b_admin.mint(&user, &2000);
     client.deposit(&user, &1000, &1000);
 
-    // Pause the contract
-    client.set_paused(&true);
+    // Pause swaps only.
+    client.guard_pause(&admin, &emergency_guard::PauseType::SWAP, &true);
 
     // Try to swap - should panic with Paused error
     client.swap(&user, &false, &100, &200);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #9)")]
+#[should_panic(expected = "Error(Contract, #14)")]
 fn test_withdraw_when_paused() {
     let e = Env::default();
     e.mock_all_auths();
@@ -884,8 +888,8 @@ fn test_withdraw_when_paused() {
     token_b_admin.mint(&user, &1000);
     let shares = client.deposit(&user, &1000, &1000);
 
-    // Pause the contract
-    client.set_paused(&true);
+    // Pause withdrawals only.
+    client.guard_pause(&admin, &emergency_guard::PauseType::WITHDRAW, &true);
 
     // Try to withdraw - should panic with Paused error
     client.withdraw(&user, &shares);
@@ -947,7 +951,7 @@ fn test_set_fee_valid() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #8)")]
+#[should_panic(expected = "Error(Contract, #9)")]
 fn test_set_fee_above_max() {
     let e = Env::default();
     e.mock_all_auths();
@@ -1092,7 +1096,7 @@ fn test_burn() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #4)")]
+#[should_panic(expected = "Error(Contract, #6)")]
 fn test_burn_insufficient_shares() {
     let e = Env::default();
     e.mock_all_auths();
@@ -1123,6 +1127,211 @@ fn test_burn_insufficient_shares() {
 
     // Try to burn more than user has
     client.burn(&user, &2000);
+}
+
+// ===== EmergencyGuard Admin Rotation Tests =====
+
+#[test]
+fn test_emergency_guard_admin_initialized_with_pool_admin() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let contract_id = e.register(LiquidityPool, ());
+    let client = LiquidityPoolClient::new(&e, &contract_id);
+
+    let admin = Address::generate(&e);
+    let token_a = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_b = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    client.initialize(&admin, &token_a, &token_b);
+
+    let admins = client.get_admins();
+    assert_eq!(admins.len(), 1);
+    assert_eq!(admins.get(0).unwrap(), admin);
+    assert_eq!(client.get_admin_threshold(), 1);
+    assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+fn test_rotate_admin_replaces_guard_and_pool_admin() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let contract_id = e.register(LiquidityPool, ());
+    let client = LiquidityPoolClient::new(&e, &contract_id);
+
+    let admin = Address::generate(&e);
+    let new_admin = Address::generate(&e);
+    let token_a = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_b = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    client.initialize(&admin, &token_a, &token_b);
+    client.rotate_admin(&vec![&e, admin.clone()], &admin, &new_admin);
+
+    let admins = client.get_admins();
+    assert_eq!(admins.len(), 1);
+    assert_eq!(admins.get(0).unwrap(), new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+
+    assert_eq!(
+        client.try_set_operation_paused(&admin, &emergency_guard::PauseType::SWAP, &true),
+        Err(Ok(Error::Unauthorized))
+    );
+
+    client.set_operation_paused(&new_admin, &emergency_guard::PauseType::SWAP, &true);
+    assert_eq!(
+        client.try_set_operation_paused(&new_admin, &emergency_guard::PauseType::SWAP, &false),
+        Ok(Ok(()))
+    );
+}
+
+#[test]
+fn test_rotated_admin_controls_pool_admin_functions() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let contract_id = e.register(LiquidityPool, ());
+    let client = LiquidityPoolClient::new(&e, &contract_id);
+
+    let admin = Address::generate(&e);
+    let new_admin = Address::generate(&e);
+    let token_a = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_b = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    client.initialize(&admin, &token_a, &token_b);
+    client.rotate_admin(&vec![&e, admin.clone()], &admin, &new_admin);
+
+    assert_eq!(client.try_set_fee(&99), Ok(Ok(())));
+    assert_eq!(client.get_fee(), 99);
+    assert_eq!(client.get_admin(), new_admin);
+}
+
+#[test]
+fn test_failed_rotate_admin_does_not_add_new_admin() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let contract_id = e.register(LiquidityPool, ());
+    let client = LiquidityPoolClient::new(&e, &contract_id);
+
+    let admin = Address::generate(&e);
+    let missing_old_admin = Address::generate(&e);
+    let new_admin = Address::generate(&e);
+    let token_a = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_b = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    client.initialize(&admin, &token_a, &token_b);
+
+    assert_eq!(
+        client.try_rotate_admin(&vec![&e, admin.clone()], &missing_old_admin, &new_admin),
+        Err(Ok(Error::Unauthorized))
+    );
+
+    let admins = client.get_admins();
+    assert_eq!(admins.len(), 1);
+    assert_eq!(admins.get(0).unwrap(), admin);
+    assert!(!admins.iter().any(|a| a == new_admin));
+    assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+fn test_add_then_remove_admin_enforces_rotation_membership() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let contract_id = e.register(LiquidityPool, ());
+    let client = LiquidityPoolClient::new(&e, &contract_id);
+
+    let admin = Address::generate(&e);
+    let new_admin = Address::generate(&e);
+    let stranger = Address::generate(&e);
+    let token_a = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_b = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+
+    client.initialize(&admin, &token_a, &token_b);
+
+    assert_eq!(
+        client.try_add_admin(&vec![&e, stranger.clone()], &new_admin),
+        Err(Ok(Error::Unauthorized))
+    );
+
+    client.add_admin(&vec![&e, admin.clone()], &new_admin);
+    let admins = client.get_admins();
+    assert_eq!(admins.len(), 2);
+    assert!(admins.iter().any(|a| a == admin));
+    assert!(admins.iter().any(|a| a == new_admin));
+
+    client.remove_admin(&vec![&e, admin.clone()], &admin);
+    let admins = client.get_admins();
+    assert_eq!(admins.len(), 1);
+    assert_eq!(admins.get(0).unwrap(), new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+
+    assert_eq!(
+        client.try_remove_admin(&vec![&e, new_admin.clone()], &new_admin),
+        Err(Ok(Error::Unauthorized))
+    );
+}
+
+#[test]
+fn test_rotated_admin_controls_emergency_pause_and_resume() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let contract_id = e.register(LiquidityPool, ());
+    let client = LiquidityPoolClient::new(&e, &contract_id);
+
+    let admin = Address::generate(&e);
+    let new_admin = Address::generate(&e);
+    let user = Address::generate(&e);
+    let token_a = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_b = e
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let token_a_admin = soroban_sdk::token::StellarAssetClient::new(&e, &token_a);
+    let token_b_admin = soroban_sdk::token::StellarAssetClient::new(&e, &token_b);
+
+    client.initialize(&admin, &token_a, &token_b);
+    client.rotate_admin(&vec![&e, admin.clone()], &admin, &new_admin);
+
+    token_a_admin.mint(&user, &2_000);
+    token_b_admin.mint(&user, &2_000);
+
+    client.emergency_pause(&vec![&e, new_admin.clone()]);
+    assert_eq!(
+        client.try_deposit(&user, &1_000, &1_000),
+        Err(Ok(Error::Paused))
+    );
+
+    assert_eq!(
+        client.try_resume(&vec![&e, admin.clone()]),
+        Err(Ok(Error::Unauthorized))
+    );
+
+    client.resume(&vec![&e, new_admin.clone()]);
+    assert_eq!(client.deposit(&user, &1_000, &1_000), 1_000);
 }
 
 // ===== Zero-Value Edge Case Tests =====

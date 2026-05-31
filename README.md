@@ -33,6 +33,12 @@ cd soroscope
 
 The **core** crate is a Rust binary that will power SoroScope's resource profiling.
 
+### Features
+- **Resource Profiling**: Analyze CPU, RAM, and ledger footprint consumption
+- **Gas Golfing Analysis**: Automated detection of gas-heavy patterns with optimization suggestions
+- **Contract Simulation**: Test contract functions with various inputs
+- **Fee Market Analysis**: Real-time fee predictions and market conditions
+
 ### Build & Run
 ```bash
 # Build the binary
@@ -90,7 +96,7 @@ The resulting `.wasm` files will be located in `target/wasm32-unknown-unknown/re
 ## 📅 Roadmap (2026)
 - **Phase 1 [COMPLETED]:** Core CLI engine for resource extraction.
 - **Phase 2 [IN PROGRESS]:** Integration of Frontend dashboard with Backend simulation engine.
-- **Phase 3:** Automated optimization recommendations.
+- **Phase 3 [IN PROGRESS]:** Automated optimization recommendations (Gas Golfing Analysis ✓).
 
 ---
 

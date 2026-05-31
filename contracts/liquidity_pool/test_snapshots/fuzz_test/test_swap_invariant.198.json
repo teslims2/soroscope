@@ -59,7 +59,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 711651767283767045
+                    "lo": 333430000500065727
                   }
                 }
               ]
@@ -84,7 +84,7 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 378673114417557380
+                    "lo": 363457393437977437
                   }
                 }
               ]
@@ -109,13 +109,13 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 711651767283767045
+                    "lo": 333430000500065727
                   }
                 },
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 378673114417557380
+                    "lo": 363457393437977437
                   }
                 }
               ]
@@ -137,7 +137,7 @@
                     {
                       "i128": {
                         "hi": 0,
-                        "lo": 711651767283767045
+                        "lo": 333430000500065727
                       }
                     }
                   ]
@@ -160,7 +160,7 @@
                     {
                       "i128": {
                         "hi": 0,
-                        "lo": 378673114417557380
+                        "lo": 363457393437977437
                       }
                     }
                   ]
@@ -526,7 +526,7 @@
                 "val": {
                   "i128": {
                     "hi": 0,
-                    "lo": 519117897108260789
+                    "lo": 348120092605665900
                   }
                 }
               }
@@ -575,84 +575,113 @@
                         "key": {
                           "vec": [
                             {
-                              "symbol": "FeeBasisPoints"
+                              "symbol": "GuardAdmins"
                             }
                           ]
                         },
                         "val": {
-                          "i128": {
-                            "hi": 0,
-                            "lo": 30
-                          }
+                          "vec": [
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                            }
+                          ]
                         }
                       },
                       {
                         "key": {
                           "vec": [
                             {
-                              "symbol": "ReserveA"
+                              "symbol": "GuardPauseState"
                             }
                           ]
                         },
                         "val": {
-                          "i128": {
-                            "hi": 0,
-                            "lo": 711651767283767045
-                          }
+                          "u32": 0
                         }
                       },
                       {
                         "key": {
                           "vec": [
                             {
-                              "symbol": "ReserveB"
+                              "symbol": "GuardThreshold"
                             }
                           ]
                         },
                         "val": {
-                          "i128": {
-                            "hi": 0,
-                            "lo": 378673114417557380
-                          }
+                          "u32": 1
                         }
                       },
                       {
                         "key": {
                           "vec": [
                             {
-                              "symbol": "TokenA"
+                              "symbol": "Pool"
                             }
                           ]
                         },
                         "val": {
-                          "address": "CBEPDNVYXQGWB5YUBXKJWYJA7OXTZW5LFLNO5JRRGE6Z6C5OSUZPCCEL"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
+                          "map": [
                             {
-                              "symbol": "TokenB"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "address": "CBUSYNQKASUYFWYC3M2GUEDMX4AIVWPALDBYJPNK6554BREHTGZ2IUNF"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
+                              "key": {
+                                "symbol": "fee_bps"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 30
+                                }
+                              }
+                            },
                             {
-                              "symbol": "TotalShares"
+                              "key": {
+                                "symbol": "reserve_a"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 333430000500065727
+                                }
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "reserve_b"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 363457393437977437
+                                }
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "token_a"
+                              },
+                              "val": {
+                                "address": "CBEPDNVYXQGWB5YUBXKJWYJA7OXTZW5LFLNO5JRRGE6Z6C5OSUZPCCEL"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "token_b"
+                              },
+                              "val": {
+                                "address": "CBUSYNQKASUYFWYC3M2GUEDMX4AIVWPALDBYJPNK6554BREHTGZ2IUNF"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "total_shares"
+                              },
+                              "val": {
+                                "i128": {
+                                  "hi": 0,
+                                  "lo": 348120092605665900
+                                }
+                              }
                             }
                           ]
-                        },
-                        "val": {
-                          "i128": {
-                            "hi": 0,
-                            "lo": 519117897108260789
-                          }
                         }
                       }
                     ]
@@ -742,7 +771,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 711651767283767045
+                          "lo": 333430000500065727
                         }
                       }
                     },
@@ -1073,7 +1102,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 378673114417557380
+                          "lo": 363457393437977437
                         }
                       }
                     },
