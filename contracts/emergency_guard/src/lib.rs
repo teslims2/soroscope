@@ -21,6 +21,8 @@ impl PauseType {
     pub const MINT: u32 = 1 << 4;
     /// Pause burning
     pub const BURN: u32 = 1 << 5;
+    /// Pause liquidity-pool pair creation in factory contracts
+    pub const CREATE_PAIR: u32 = 1 << 6;
 
     pub fn new(value: u32) -> Self {
         PauseType(value)
@@ -112,6 +114,8 @@ pub struct AdminRemovedEvent {
     pub approvers: Vec<Address>,
     pub admin: Address,
 }
+/// Result type for guard operations
+// Result type for guard operations replaced inline
 
 /// EmergencyGuard trait for standardized pause and admin management
 pub trait EmergencyGuardTrait {
@@ -286,6 +290,14 @@ impl EmergencyGuard {
             .set(&DataKey::PauseState, &pause_state);
 
         emit_pause_state_changed(&env, &admin, operation, paused);
+        // Emit standardized EmergencyGuard event
+        env.events().publish(
+            (
+                String::from_str(&env, "emergency_guard.set_pause"),
+                admin.clone(),
+            ),
+            (operation, paused),
+        );
         Ok(())
     }
 
@@ -301,6 +313,13 @@ impl EmergencyGuard {
             .set(&DataKey::PauseState, &pause_state);
 
         emit_emergency_paused_all(&env, &approvers);
+        env.events().publish(
+            (String::from_str(
+                &env,
+                "emergency_guard.emergency_pause_all",
+            ),),
+            (approvers.clone(),),
+        );
         Ok(())
     }
 
@@ -314,6 +333,10 @@ impl EmergencyGuard {
             .set(&DataKey::PauseState, &pause_state);
 
         emit_resumed_all(&env, &approvers);
+        env.events().publish(
+            (String::from_str(&env, "emergency_guard.resume_all"),),
+            (approvers.clone(),),
+        );
         Ok(())
     }
 
@@ -330,6 +353,13 @@ impl EmergencyGuard {
             admins.push_back(new_admin.clone());
             env.storage().instance().set(&DataKey::Admins, &admins);
             emit_admin_added(&env, &approvers, &new_admin);
+            env.events().publish(
+                (
+                    String::from_str(&env, "emergency_guard.admin_added"),
+                    new_admin.clone(),
+                ),
+                (),
+            );
         }
 
         Ok(())
@@ -366,6 +396,13 @@ impl EmergencyGuard {
 
         env.storage().instance().set(&DataKey::Admins, &new_admins);
         emit_admin_removed(&env, &approvers, &admin);
+        env.events().publish(
+            (
+                String::from_str(&env, "emergency_guard.admin_removed"),
+                admin.clone(),
+            ),
+            (),
+        );
         Ok(())
     }
 

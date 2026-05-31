@@ -8,6 +8,8 @@ use soroban_sdk::{
     testutils::{Address as _, Events},
     vec, Address, Env, String as SorobanString, TryIntoVal,
 };
+use soroban_sdk::{testutils::Address as _, vec, Address, Env};
+use soroban_sdk::{String as SorobanString};
 
 #[test]
 fn test_emergency_guard_initialization() {
@@ -192,4 +194,61 @@ fn test_guard_events() {
         .expect("missing admin remove event");
     let remove_data: AdminRemovedEvent = remove_event.2.try_into_val(&env).unwrap();
     assert_eq!(remove_data.admin, admin3);
+
+#[test]
+fn test_event_emission_for_guard_actions() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let contract_id = e.register(crate::EmergencyGuard, ());
+    let client = crate::EmergencyGuardClient::new(&e, &contract_id);
+
+    // Setup admins
+    let admin1 = Address::random(&e);
+    let admin2 = Address::random(&e);
+    let admins = vec![&e, admin1.clone(), admin2.clone()];
+
+    // Initialize guard
+    client.initialize(&admins, &1u32);
+
+    // Call set_pause
+    client.set_pause(&admin1, &crate::PauseType::TRANSFER, &true).unwrap();
+
+    // Emergency pause all
+    let approvers = vec![&e, admin1.clone()];
+    client.emergency_pause(&approvers).unwrap();
+
+    // Resume all
+    client.resume(&approvers).unwrap();
+
+    // Add admin
+    let new_admin = Address::random(&e);
+    client.add_admin(&approvers, &new_admin).unwrap();
+
+    // Remove admin
+    client.remove_admin(&approvers, &new_admin).unwrap();
+
+    // Inspect events
+    let events = e.events().all();
+
+    // Helper to find events by name
+    let find_events = |name: &str| {
+        let name_val = String::from_str(&e, name);
+        events
+            .iter()
+            .filter(|(_, topics, _)| {
+                if topics.is_empty() {
+                    return false;
+                }
+                let topic_str: Result<SorobanString, _> = topics.get(0).unwrap().try_into_val(&e);
+                topic_str.is_ok() && topic_str.unwrap() == name_val
+            })
+            .collect::<Vec<_>>()
+    };
+
+    assert!(!find_events("emergency_guard.set_pause").is_empty());
+    assert!(!find_events("emergency_guard.emergency_pause_all").is_empty());
+    assert!(!find_events("emergency_guard.resume_all").is_empty());
+    assert!(!find_events("emergency_guard.admin_added").is_empty());
+    assert!(!find_events("emergency_guard.admin_removed").is_empty());
 }
