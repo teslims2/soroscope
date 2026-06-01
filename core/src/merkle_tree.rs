@@ -1,4 +1,5 @@
 use sha2::{Digest, Sha256};
+use rayon::prelude::*;
 
 /// Represents a Merkle Tree for storing cryptographic state commitments.
 pub struct MerkleTree {
@@ -15,7 +16,7 @@ impl MerkleTree {
     pub fn new(levels: usize) -> Self {
         MerkleTree {
             root: [0u8; 32],
-            levels: levels,
+            levels,
             data_leaves: Vec::new(),
         }
     }
@@ -27,101 +28,35 @@ impl MerkleTree {
             return Err("Cannot build tree from empty leaves.");
         }
         
-        // TODO: Implement the actual construction logic here.
-        // This involves iteratively hashing adjacent leaf pairs up to the root level.
-        
-        self.data_leaves = leaves;
-        // A placeholder for the root hash calculation
+        self.data_leaves = leaves.clone();
         self.root.copy_from_slice(&Self::calculate_root_hash(leaves));
         Ok(())
-    }
-
-        if current_level.len() == 1 {
-            return current_level[0].clone();
-        }
-
-        let mut next_level: Vec<Vec<u8>> = Vec::new();
-        // Iterate over the levels, processing pairs in groups of 2
-        let num_pairs = current_level.len() / 2;
-        
-        for i in 0..num_pairs {
-            let left = &current_level[i];
-            let right = &current_level[i + 1];
-            
-            // Concatenate the hashes and rehash
-            let mut combined = Vec::new();
-            combined.extend_from_slice(left);
-            combined.extend_from_slice(right);
-
-            let mut hasher = Sha256::new();
-            hasher.update(combined);
-            next_level.push(hasher.finalize().to_vec());
-        }
-
-        // If the number of nodes was odd, the last node is hashed with itself (standard practice: hash(x || x))
-        if current_level.len() % 2 != 0 {
-            let last = &current_level[current_level.len() - 1];
-            let mut combined = Vec::new();
-            combined.extend_from_slice(last);
-            combined.extend_from_slice(last); // Hash with itself
-            
-            let mut hasher = Sha256::new();
-            hasher.update(combined);
-            next_level.push(hasher.finalize().to_vec());
-        }
-        
-        current_level = next_level;
-        
-        // Recursively find the root
-        Self::calculate_root_hash(current_level)
     }
 
     /// A helper function to perform the recursive root calculation.
     fn calculate_root_hash(mut levels: Vec<Vec<u8>>) -> [u8; 32] {
         while levels.len() > 1 {
-            let num_pairs = levels.len() / 2;
-            let mut next_level: Vec<Vec<u8>> = Vec::new();
-            
-            for i in 0..num_pairs {
-                let left = &levels[i];
-                let right = &levels[i + 1];
-                
-                let mut combined = Vec::new();
-                combined.extend_from_slice(left);
-                combined.extend_from_slice(right);
-
-                let mut hasher = Sha256::new();
-                hasher.update(combined);
-                next_level.push(hasher.finalize().to_vec());
-            }
-
-            if levels.len() % 2 != 0 {
-                let last = &levels[levels.len() - 1];
-                let mut combined = Vec::new();
-                combined.extend_from_slice(last);
-                combined.extend_from_slice(last);
-                
-                let mut hasher = Sha256::new();
-                hasher.update(combined);
-                next_level.push(hasher.finalize().to_vec());
-            }
-            
+            let next_level: Vec<Vec<u8>> = levels
+                .par_chunks(2)
+                .map(|pair| {
+                    let mut hasher = Sha256::new();
+                    hasher.update(&pair[0]);
+                    if pair.len() == 2 {
+                        hasher.update(&pair[1]);
+                    } else {
+                        hasher.update(&pair[0]); // Hash with itself if odd
+                    }
+                    hasher.finalize().to_vec()
+                })
+                .collect();
             levels = next_level;
         }
         
         // Return the final hash (the root)
         let mut root_bytes = [0u8; 32];
-        if let Some(root) = levels.get(0) {
+        if let Some(root) = levels.first() {
             root_bytes.copy_from_slice(root);
         }
-        root_bytes
-    }
-            current_level = next_level;
-        }
-        
-        // Return the final hash (the root)
-        let mut root_bytes = [0u8; 32];
-        root_bytes.copy_from_slice(&current_level[0]);
         root_bytes
     }
 
@@ -144,10 +79,7 @@ mod tests {
         // Example data leaves
         let data = vec![b"data1".to_vec(), b"data2".to_vec(), b"data3".to_vec()];
         
-        // Since the calculate_root_hash is hardcoded and not fully tested, 
-        // we just check if it runs without panicking.
-        let result = tree.build(data.clone());
+        let result = tree.build(data);
         assert!(result.is_ok());
-        // In a full implementation, we would assert the correct root hash.
     }
 }
