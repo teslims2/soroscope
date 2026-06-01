@@ -2,10 +2,19 @@
 extern crate std;
 use super::*;
 
-use soroban_sdk::{BytesN, Env};
+use soroban_sdk::{testutils::Address as _, BytesN, Env};
 
-fn dummy_pool_hash(env: &Env) -> BytesN<32> {
-    BytesN::from_array(env, &[0; 32])
+// Issue #310: Import the compiled Liquidity Pool WASM so integration tests deploy
+// the real contract instead of relying on a placeholder zero-hash.
+mod liquidity_pool {
+    soroban_sdk::contractimport!(
+        file = "../../target/wasm32-unknown-unknown/release/liquidity_pool.wasm"
+    );
+}
+
+fn pool_wasm_hash(env: &Env) -> BytesN<32> {
+    env.deployer()
+        .upload_contract_wasm(liquidity_pool::WASM)
 }
 
 #[test]
@@ -82,7 +91,7 @@ fn test_pool_creation() {
         .register_stellar_asset_contract_v2(token_admin.clone())
         .address();
 
-    let pool_hash = dummy_pool_hash(&env);
+    let pool_hash = pool_wasm_hash(&env);
 
     // Note: Due to a testutils handle mapping bug in the Soroban SDK mock environment,
     // returning a newly deployed address from a native contract call corrupts the handle
@@ -117,7 +126,7 @@ fn test_duplicate_pair_panics() {
         .register_stellar_asset_contract_v2(token_admin.clone())
         .address();
 
-    let pool_hash = dummy_pool_hash(&env);
+    let pool_hash = pool_wasm_hash(&env);
 
     // First creation succeeds
     factory_client.create_pair(&token_a, &token_b, &pool_hash);
