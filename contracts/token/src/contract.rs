@@ -2,6 +2,8 @@ use crate::admin::{has_administrator, read_administrator, write_administrator};
 use crate::allowance::{read_allowance, spend_allowance, write_allowance};
 use crate::balance::{read_balance, receive_balance, spend_balance};
 use crate::metadata::{read_decimal, read_name, read_symbol, write_metadata};
+use emergency_guard::{EmergencyGuard, GuardError};
+use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 use emergency_guard::{EmergencyGuard, GuardError, PauseType};
 use soroban_sdk::{contract, contractimpl, vec, Address, Env, String, Vec};
 
@@ -41,6 +43,8 @@ pub trait TokenTrait {
     fn decimals(e: Env) -> u32;
     fn name(e: Env) -> String;
     fn symbol(e: Env) -> String;
+    fn guard_pause(e: Env, admin: Address, operation: u32, paused: bool) -> Result<(), GuardError>;
+    fn guard_unpause(e: Env, approvers: Vec<Address>) -> Result<(), GuardError>;
 }
 
 #[contract]
@@ -57,6 +61,12 @@ impl TokenTrait for Token {
             .expect("failed to initialize emergency guard");
         // One write instead of three separate writes for name/symbol/decimals.
         write_metadata(&e, &name, &symbol, decimal);
+        
+        // Initialize emergency guard with single admin and threshold of 1
+        let admins = vec![&e, admin.clone()];
+        let threshold = 1;
+        EmergencyGuard::initialize(e, admins, threshold)
+            .expect("Failed to initialize emergency guard");
     }
 
     fn mint(e: Env, to: Address, amount: i128) {
@@ -64,6 +74,11 @@ impl TokenTrait for Token {
         let admin = read_administrator(&e);
         admin.require_auth();
         e.storage().instance().extend_ttl(100, 100);
+
+        // Check if minting is paused (using MINT pause type = 1 << 4 = 16)
+        if EmergencyGuard::is_paused(e.clone(), 1 << 4) {
+            panic!("minting is paused");
+        }
 
         receive_balance(&e, to, amount);
     }
@@ -140,6 +155,11 @@ impl TokenTrait for Token {
         from.require_auth();
         e.storage().instance().extend_ttl(100, 100);
 
+        // Check if transfers are paused (using TRANSFER pause type = 1 << 3 = 8)
+        if EmergencyGuard::is_paused(e.clone(), 1 << 3) {
+            panic!("transfers are paused");
+        }
+
         spend_balance(&e, from, amount);
         receive_balance(&e, to, amount);
     }
@@ -148,6 +168,11 @@ impl TokenTrait for Token {
         require_not_paused(&e, PauseType::TRANSFER);
         spender.require_auth();
         e.storage().instance().extend_ttl(100, 100);
+
+        // Check if transfers are paused (using TRANSFER pause type = 1 << 3 = 8)
+        if EmergencyGuard::is_paused(e.clone(), 1 << 3) {
+            panic!("transfers are paused");
+        }
 
         spend_allowance(&e, from.clone(), spender, amount);
         spend_balance(&e, from, amount);
@@ -159,6 +184,11 @@ impl TokenTrait for Token {
         from.require_auth();
         e.storage().instance().extend_ttl(100, 100);
 
+        // Check if burning is paused (using BURN pause type = 1 << 5 = 32)
+        if EmergencyGuard::is_paused(e.clone(), 1 << 5) {
+            panic!("burning is paused");
+        }
+
         spend_balance(&e, from, amount);
     }
 
@@ -166,6 +196,11 @@ impl TokenTrait for Token {
         require_not_paused(&e, PauseType::BURN);
         spender.require_auth();
         e.storage().instance().extend_ttl(100, 100);
+
+        // Check if burning is paused (using BURN pause type = 1 << 5 = 32)
+        if EmergencyGuard::is_paused(e.clone(), 1 << 5) {
+            panic!("burning is paused");
+        }
 
         spend_allowance(&e, from.clone(), spender, amount);
         spend_balance(&e, from, amount);
@@ -181,5 +216,13 @@ impl TokenTrait for Token {
 
     fn symbol(e: Env) -> String {
         read_symbol(&e)
+    }
+
+    fn guard_pause(e: Env, admin: Address, operation: u32, paused: bool) -> Result<(), GuardError> {
+        EmergencyGuard::set_pause(e, admin, operation, paused)
+    }
+
+    fn guard_unpause(e: Env, approvers: Vec<Address>) -> Result<(), GuardError> {
+        EmergencyGuard::resume(e, approvers)
     }
 }
