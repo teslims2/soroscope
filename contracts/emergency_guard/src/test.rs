@@ -77,6 +77,47 @@ fn test_pause_all_and_unpause_all() {
 }
 
 #[test]
+fn test_unpause_operation() {
+    let env = Env::default();
+    let mut pause_state = crate::PauseType::new(0);
+    pause_state.set_paused(crate::PauseType::SWAP, true);
+    env.storage().instance().set(&crate::DataKey::PauseState, &pause_state);
+
+    crate::DefaultEmergencyGuard::unpause(&env, crate::PauseType::SWAP)
+        .expect("Failed to unpause operation");
+
+    let state: crate::PauseType = env
+        .storage()
+        .instance()
+        .get(&crate::DataKey::PauseState)
+        .unwrap_or_else(|| crate::PauseType::new(0));
+    assert!(!state.is_paused(crate::PauseType::SWAP));
+}
+
+#[test]
+fn test_unpause_all_operations() {
+    let env = Env::default();
+    let mut pause_state = crate::PauseType::new(0);
+    pause_state.pause_all();
+    env.storage().instance().set(&crate::DataKey::PauseState, &pause_state);
+
+    crate::DefaultEmergencyGuard::unpause_all(&env)
+        .expect("Failed to unpause all operations");
+
+    let state: crate::PauseType = env
+        .storage()
+        .instance()
+        .get(&crate::DataKey::PauseState)
+        .unwrap_or_else(|| crate::PauseType::new(0));
+    assert!(!state.is_paused(crate::PauseType::SWAP));
+    assert!(!state.is_paused(crate::PauseType::DEPOSIT));
+    assert!(!state.is_paused(crate::PauseType::WITHDRAW));
+    assert!(!state.is_paused(crate::PauseType::TRANSFER));
+    assert!(!state.is_paused(crate::PauseType::MINT));
+    assert!(!state.is_paused(crate::PauseType::BURN));
+}
+
+#[test]
 fn test_multiple_pause_types() {
     let mut pause = PauseType::new(0);
     let combined = PauseType::SWAP | PauseType::DEPOSIT | PauseType::MINT;
