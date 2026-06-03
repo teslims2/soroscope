@@ -16,3 +16,6 @@ pub mod wasm_branch_analysis;
 pub mod fuzz_simulation;
 #[cfg(test)]
 pub mod fuzz_tests;
+pub mod fuzz_tests;
+#[cfg(test)]
+pub mod fuzz_simulation;
