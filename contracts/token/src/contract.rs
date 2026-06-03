@@ -1,9 +1,13 @@
+#![allow(dead_code)]
+
 use crate::admin::{has_administrator, read_administrator, write_administrator};
 use crate::allowance::{read_allowance, spend_allowance, write_allowance};
 use crate::balance::{read_balance, receive_balance, spend_balance};
 use crate::metadata::{read_decimal, read_name, read_symbol, write_metadata};
 use emergency_guard::{EmergencyGuard, GuardError};
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
+use emergency_guard::{EmergencyGuard, PauseType};
+use soroban_sdk::{contract, contractimpl, vec, Address, Env, String, Vec};
 use emergency_guard::{EmergencyGuard, GuardError, PauseType};
 use soroban_sdk::{contract, contractimpl, vec, Address, Env, String, Vec};
 
@@ -73,10 +77,22 @@ impl TokenTrait for Token {
         let admins = vec![&e, admin.clone()];
         let threshold = 1;
         EmergencyGuard::initialize(e, admins, threshold)
+
+        // Initialize emergency guard with the token admin as the sole guard admin.
+        // All three fields (PauseState, Admins, SignatureThreshold) share the same
+        // instance storage entry as the token's own fields — no extra footprint entries.
+        let admins: Vec<Address> = vec![&e, admin];
+        EmergencyGuard::initialize(e, admins, 1)
             .expect("Failed to initialize emergency guard");
     }
 
     fn mint(e: Env, to: Address, amount: i128) {
+        // Guard check: minting can be paused independently of transfers.
+        // Reads the single PauseState instance entry — same footprint as before.
+        if EmergencyGuard::is_paused(e.clone(), PauseType::MINT) {
+            panic!("minting is paused");
+        }
+
         require_not_paused(&e, PauseType::MINT);
         let admin = read_administrator(&e);
         admin.require_auth();
@@ -168,6 +184,11 @@ impl TokenTrait for Token {
     }
 
     fn approve(e: Env, from: Address, spender: Address, amount: i128, expiration_ledger: u32) {
+        // Guard check: approvals follow the transfer pause flag.
+        if EmergencyGuard::is_paused(e.clone(), PauseType::TRANSFER) {
+            panic!("transfers are paused");
+        }
+
         from.require_auth();
         e.storage().instance().extend_ttl(100, 100);
 
@@ -180,6 +201,11 @@ impl TokenTrait for Token {
     }
 
     fn transfer(e: Env, from: Address, to: Address, amount: i128) {
+        // Guard check: granular transfer pause.
+        if EmergencyGuard::is_paused(e.clone(), PauseType::TRANSFER) {
+            panic!("transfers are paused");
+        }
+
         require_not_paused(&e, PauseType::TRANSFER);
         from.require_auth();
         e.storage().instance().extend_ttl(100, 100);
@@ -194,6 +220,11 @@ impl TokenTrait for Token {
     }
 
     fn transfer_from(e: Env, spender: Address, from: Address, to: Address, amount: i128) {
+        // Guard check: same transfer flag guards delegated transfers.
+        if EmergencyGuard::is_paused(e.clone(), PauseType::TRANSFER) {
+            panic!("transfers are paused");
+        }
+
         require_not_paused(&e, PauseType::TRANSFER);
         spender.require_auth();
         e.storage().instance().extend_ttl(100, 100);
@@ -209,6 +240,11 @@ impl TokenTrait for Token {
     }
 
     fn burn(e: Env, from: Address, amount: i128) {
+        // Guard check: burning can be paused independently.
+        if EmergencyGuard::is_paused(e.clone(), PauseType::BURN) {
+            panic!("burning is paused");
+        }
+
         require_not_paused(&e, PauseType::BURN);
         from.require_auth();
         e.storage().instance().extend_ttl(100, 100);
@@ -222,6 +258,11 @@ impl TokenTrait for Token {
     }
 
     fn burn_from(e: Env, spender: Address, from: Address, amount: i128) {
+        // Guard check: delegated burn follows the same burn flag.
+        if EmergencyGuard::is_paused(e.clone(), PauseType::BURN) {
+            panic!("burning is paused");
+        }
+
         require_not_paused(&e, PauseType::BURN);
         spender.require_auth();
         e.storage().instance().extend_ttl(100, 100);
@@ -253,5 +294,85 @@ impl TokenTrait for Token {
 
     fn guard_unpause(e: Env, approvers: Vec<Address>) -> Result<(), GuardError> {
         EmergencyGuard::resume(e, approvers)
+    }
+}
+
+/// Guard-management functions exposed on the token contract.
+/// These allow the token admin (initialised as guard admin) to manage
+/// pause state without any extra off-chain tooling.
+#[contractimpl]
+impl Token {
+    /// Pause all minting operations.
+    /// Auth is handled inside EmergencyGuard::set_pause — no double-auth.
+    pub fn pause_minting(e: Env, admin: Address) {
+        EmergencyGuard::set_pause(e, admin, PauseType::MINT, true)
+            .expect("Unauthorized: caller is not a guard admin");
+    }
+
+    /// Resume minting operations.
+    pub fn resume_minting(e: Env, admin: Address) {
+        EmergencyGuard::set_pause(e, admin, PauseType::MINT, false)
+            .expect("Unauthorized");
+    }
+
+    /// Pause all token transfers (also blocks approve / transfer_from).
+    /// Auth is handled inside EmergencyGuard::set_pause — no double-auth.
+    pub fn pause_transfers(e: Env, admin: Address) {
+        EmergencyGuard::set_pause(e, admin, PauseType::TRANSFER, true)
+            .expect("Unauthorized: caller is not a guard admin");
+    }
+
+    /// Resume token transfers.
+    pub fn resume_transfers(e: Env, admin: Address) {
+        EmergencyGuard::set_pause(e, admin, PauseType::TRANSFER, false)
+            .expect("Unauthorized");
+    }
+
+    /// Pause all burn operations.
+    /// Auth is handled inside EmergencyGuard::set_pause — no double-auth.
+    pub fn pause_burning(e: Env, admin: Address) {
+        EmergencyGuard::set_pause(e, admin, PauseType::BURN, true)
+            .expect("Unauthorized: caller is not a guard admin");
+    }
+
+    /// Resume burn operations.
+    pub fn resume_burning(e: Env, admin: Address) {
+        EmergencyGuard::set_pause(e, admin, PauseType::BURN, false)
+            .expect("Unauthorized");
+    }
+
+    /// Emergency pause: freeze all token operations atomically.
+    /// Requires multi-sig approval (currently threshold = 1 for single-admin setup).
+    pub fn emergency_pause_all(e: Env, approvers: Vec<Address>) {
+        EmergencyGuard::emergency_pause(e, approvers)
+            .expect("Unauthorized or insufficient approvals");
+    }
+
+    /// Resume all paused operations at once.
+    pub fn resume_all(e: Env, approvers: Vec<Address>) {
+        EmergencyGuard::resume(e, approvers)
+            .expect("Unauthorized or insufficient approvals");
+    }
+
+    /// Query the raw bitmask pause state (for SoroScope analysis / frontends).
+    pub fn get_pause_state(e: Env) -> u32 {
+        let state = EmergencyGuard::is_paused(e, 0);
+        // Return raw bitmask from PauseState storage entry
+        if state { 1 } else { 0 }
+    }
+
+    /// Check whether a specific operation flag is currently paused.
+    pub fn is_operation_paused(e: Env, operation: u32) -> bool {
+        EmergencyGuard::is_paused(e, operation)
+    }
+
+    /// List current guard admins.
+    pub fn get_guard_admins(e: Env) -> Vec<Address> {
+        EmergencyGuard::get_admins(e)
+    }
+
+    /// Get the multi-sig threshold for emergency operations.
+    pub fn get_guard_threshold(e: Env) -> u32 {
+        EmergencyGuard::get_threshold(e)
     }
 }
