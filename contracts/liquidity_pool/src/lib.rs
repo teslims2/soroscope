@@ -103,6 +103,36 @@ pub struct BurnEvent {
     pub shares_burned: i128,
 }
 
+/// Event payload emitted after a successful stake.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StakeEvent {
+    /// Address that staked LP shares.
+    pub user: Address,
+    /// LP shares staked.
+    pub amount_staked: i128,
+}
+
+/// Event payload emitted after a successful unstake.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnstakeEvent {
+    /// Address that unstaked LP shares.
+    pub user: Address,
+    /// LP shares unstaked.
+    pub amount_unstaked: i128,
+}
+
+/// Event payload emitted after claiming rewards.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimRewardsEvent {
+    /// Address that claimed rewards.
+    pub user: Address,
+    /// Amount of rewards claimed.
+    pub rewards_amount: i128,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FeeChangedEvent {
@@ -274,6 +304,12 @@ pub enum DataKey {
     LastOraclePrice,
     LastVolatilityBps,
     PendingFeeUpdate,
+    Paused,
+    StakedBalance(Address),
+    TotalStaked,
+    UserRewards(Address),
+    LastRewardLedger,
+    AccumulatedRewardPerShare,
 }
 
 fn sqrt(x: i128) -> i128 {
@@ -454,6 +490,13 @@ fn require_not_paused(e: &Env, operation: u32) -> Result<(), Error> {
     }
 }
 
+/// Rewards per ledger: 1 LP token (with 7 decimals) = 10_000_000
+pub const REWARDS_PER_LEDGER: i128 = 10_000_000;
+/// Precision factor for reward calculations
+pub const REWARD_PRECISION: i128 = 1_000_000_000_000;
+
+pub trait PriceOracle {
+    fn latest_price(e: Env) -> i128;
 fn target_fee_from_volatility(base_fee_bps: i128, volatility_bps: i128) -> i128 {
     let dynamic = if volatility_bps >= HIGH_VOLATILITY_THRESHOLD_BPS {
         HIGH_VOLATILITY_FEE_BPS
@@ -1899,6 +1942,295 @@ impl LiquidityPool {
     }
     // ── Core AMM operations ───────────────────────────────────────────────────
 
+    /// Helper function: updates the accumulated reward per share based on elapsed ledgers.
+    fn update_reward_state(e: &Env) {
+        let last_reward_ledger: u32 = e
+            .storage()
+            .instance()
+            .get(&DataKey::LastRewardLedger)
+            .unwrap_or(e.ledger().sequence());
+        let current_ledger = e.ledger().sequence();
+
+        if current_ledger <= last_reward_ledger {
+            return;
+        }
+
+        let total_staked: i128 = e
+            .storage()
+            .instance()
+            .get(&DataKey::TotalStaked)
+            .unwrap_or(0);
+
+        if total_staked > 0 {
+            let ledgers_elapsed = (current_ledger - last_reward_ledger) as i128;
+            let new_rewards = ledgers_elapsed
+                .checked_mul(REWARDS_PER_LEDGER)
+                .unwrap_or(0);
+            
+            let reward_per_share_increment = new_rewards
+                .checked_mul(REWARD_PRECISION)
+                .and_then(|v| {
+                    if total_staked > 0 {
+                        Some(v / total_staked)
+                    } else {
+                        Some(0)
+                    }
+                })
+                .unwrap_or(0);
+
+            let accumulated: i128 = e
+                .storage()
+                .instance()
+                .get(&DataKey::AccumulatedRewardPerShare)
+                .unwrap_or(0);
+
+            e.storage()
+                .instance()
+                .set(&DataKey::AccumulatedRewardPerShare, &(accumulated + reward_per_share_increment));
+        }
+
+        e.storage()
+            .instance()
+            .set(&DataKey::LastRewardLedger, &current_ledger);
+    }
+
+    /// Helper function: calculate pending rewards for a user.
+    fn calculate_pending_rewards(e: &Env, user: &Address, staked_amount: i128) -> i128 {
+        let accumulated_per_share: i128 = e
+            .storage()
+            .instance()
+            .get(&DataKey::AccumulatedRewardPerShare)
+            .unwrap_or(0);
+
+        let earned = staked_amount
+            .checked_mul(accumulated_per_share)
+            .and_then(|v| Some(v / REWARD_PRECISION))
+            .unwrap_or(0);
+
+        let claimed: i128 = e
+            .storage()
+            .persistent()
+            .get::<_, i128>(&DataKey::UserRewards(user.clone()))
+            .unwrap_or(0);
+
+        earned.saturating_sub(claimed)
+    }
+
+    /// Stake LP shares to earn staking rewards.
+    ///
+    /// # Parameters
+    /// - `e`: Soroban environment.
+    /// - `user`: Address staking LP shares.
+    /// - `amount`: Number of LP shares to stake.
+    ///
+    /// # Returns
+    /// - `Ok(())`: Success.
+    /// - `Err(Error::Paused)`: Contract is paused.
+    /// - `Err(Error::InsufficientBalance)`: User lacks enough LP shares.
+    pub fn stake(e: Env, user: Address, amount: i128) -> Result<(), Error> {
+        check_paused(&e)?;
+        user.require_auth();
+
+        // Check user has sufficient balance
+        let balance_key = DataKey::Balance(user.clone());
+        let user_balance: i128 = e.storage().persistent().get(&balance_key).unwrap_or(0);
+        if user_balance < amount {
+            return Err(Error::InsufficientBalance);
+        }
+
+        // Update reward state
+        Self::update_reward_state(&e);
+
+        // Transfer LP shares from user's balance to staked balance
+        let staked_key = DataKey::StakedBalance(user.clone());
+        let current_staked: i128 = e.storage().persistent().get(&staked_key).unwrap_or(0);
+
+        e.storage()
+            .persistent()
+            .set(&balance_key, &(user_balance - amount));
+        e.storage().persistent().extend_ttl(&balance_key, 100, 100);
+
+        e.storage()
+            .persistent()
+            .set(&staked_key, &(current_staked + amount));
+        e.storage().persistent().extend_ttl(&staked_key, 100, 100);
+
+        // Update total staked
+        let total_staked: i128 = e
+            .storage()
+            .instance()
+            .get(&DataKey::TotalStaked)
+            .unwrap_or(0);
+        e.storage()
+            .instance()
+            .set(&DataKey::TotalStaked, &(total_staked + amount));
+
+        // Emit stake event
+        e.events().publish(
+            (String::from_str(&e, "stake"), user.clone()),
+            StakeEvent {
+                user,
+                amount_staked: amount,
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Unstake LP shares.
+    ///
+    /// # Parameters
+    /// - `e`: Soroban environment.
+    /// - `user`: Address unstaking LP shares.
+    /// - `amount`: Number of LP shares to unstake.
+    ///
+    /// # Returns
+    /// - `Ok(())`: Success.
+    /// - `Err(Error::Paused)`: Contract is paused.
+    /// - `Err(Error::InsufficientShares)`: User lacks enough staked LP shares.
+    pub fn unstake(e: Env, user: Address, amount: i128) -> Result<(), Error> {
+        check_paused(&e)?;
+        user.require_auth();
+
+        let staked_key = DataKey::StakedBalance(user.clone());
+        let current_staked: i128 = e.storage().persistent().get(&staked_key).unwrap_or(0);
+        if current_staked < amount {
+            return Err(Error::InsufficientShares);
+        }
+
+        // Update reward state
+        Self::update_reward_state(&e);
+
+        // Transfer LP shares from staked balance back to user's balance
+        let balance_key = DataKey::Balance(user.clone());
+        let user_balance: i128 = e.storage().persistent().get(&balance_key).unwrap_or(0);
+
+        e.storage()
+            .persistent()
+            .set(&balance_key, &(user_balance + amount));
+        e.storage().persistent().extend_ttl(&balance_key, 100, 100);
+
+        e.storage()
+            .persistent()
+            .set(&staked_key, &(current_staked - amount));
+        e.storage().persistent().extend_ttl(&staked_key, 100, 100);
+
+        // Update total staked
+        let total_staked: i128 = e
+            .storage()
+            .instance()
+            .get(&DataKey::TotalStaked)
+            .unwrap_or(0);
+        e.storage()
+            .instance()
+            .set(&DataKey::TotalStaked, &(total_staked - amount));
+
+        // Emit unstake event
+        e.events().publish(
+            (String::from_str(&e, "unstake"), user.clone()),
+            UnstakeEvent {
+                user,
+                amount_unstaked: amount,
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Claim accumulated staking rewards.
+    ///
+    /// # Parameters
+    /// - `e`: Soroban environment.
+    /// - `user`: Address claiming rewards.
+    ///
+    /// # Returns
+    /// - `Ok(i128)`: Amount of rewards claimed.
+    /// - `Err(Error::Paused)`: Contract is paused.
+    pub fn claim_rewards(e: Env, user: Address) -> Result<i128, Error> {
+        check_paused(&e)?;
+        user.require_auth();
+
+        // Update reward state
+        Self::update_reward_state(&e);
+
+        let staked_key = DataKey::StakedBalance(user.clone());
+        let staked_amount: i128 = e.storage().persistent().get(&staked_key).unwrap_or(0);
+
+        // Calculate pending rewards
+        let pending = Self::calculate_pending_rewards(&e, &user, staked_amount);
+
+        if pending <= 0 {
+            return Ok(0);
+        }
+
+        // Update claimed rewards
+        let accumulated_per_share: i128 = e
+            .storage()
+            .instance()
+            .get(&DataKey::AccumulatedRewardPerShare)
+            .unwrap_or(0);
+
+        let new_claimed = staked_amount
+            .checked_mul(accumulated_per_share)
+            .and_then(|v| Some(v / REWARD_PRECISION))
+            .unwrap_or(0);
+
+        e.storage()
+            .persistent()
+            .set(&DataKey::UserRewards(user.clone()), &new_claimed);
+        e.storage()
+            .persistent()
+            .extend_ttl(&DataKey::UserRewards(user.clone()), 100, 100);
+
+        // Emit claim rewards event
+        e.events().publish(
+            (String::from_str(&e, "claim_rewards"), user.clone()),
+            ClaimRewardsEvent {
+                user,
+                rewards_amount: pending,
+            },
+        );
+
+        Ok(pending)
+    }
+
+    /// Get the total amount of LP shares staked by a user.
+    pub fn get_staked_balance(e: Env, user: Address) -> i128 {
+        let staked_key = DataKey::StakedBalance(user);
+        e.storage().persistent().get(&staked_key).unwrap_or(0)
+    }
+
+    /// Get the pending rewards for a user.
+    pub fn get_pending_rewards(e: Env, user: Address) -> i128 {
+        let staked_key = DataKey::StakedBalance(user.clone());
+        let staked_amount: i128 = e.storage().persistent().get(&staked_key).unwrap_or(0);
+        Self::calculate_pending_rewards(&e, &user, staked_amount)
+    }
+
+    /// Get the total amount of LP shares currently staked in the contract.
+    pub fn get_total_staked(e: Env) -> i128 {
+        e.storage()
+            .instance()
+            .get(&DataKey::TotalStaked)
+            .unwrap_or(0)
+    }
+
+    /// Deposits token A and token B into the pool and mints LP shares.
+    ///
+    /// The caller (`to`) must authorize the transfer. For first liquidity,
+    /// shares are minted as `sqrt(amount_a * amount_b)`. For subsequent
+    /// deposits, shares are minted proportionally to existing reserves.
+    ///
+    /// # Parameters
+    /// - `e`: Soroban environment.
+    /// - `to`: Liquidity provider address receiving LP shares.
+    /// - `amount_a`: Amount of token A to deposit.
+    /// - `amount_b`: Amount of token B to deposit.
+    ///
+    /// # Returns
+    /// - `Ok(i128)`: Number of LP shares minted.
+    /// - `Err(Error::NotInitialized)`: Pool tokens were not configured.
+    /// - `Err(Error::InsufficientLiquidity)`: Arithmetic failed (for example overflow).
     pub fn deposit(e: Env, to: Address, amount_a: i128, amount_b: i128) -> Result<i128, Error> {
         require_not_paused(&e, PauseType::DEPOSIT)?;
         to.require_auth();
