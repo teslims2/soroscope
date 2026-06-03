@@ -133,8 +133,24 @@ export function ResultViewer({ result }: ResultViewerProps) {
               {result.error}
             </div>
           </div>
-          <div style={{ fontSize: '12px', color: '#8b949e' }}>
-            💡 Tip: Check if the backend is running and all parameters are correct.
+          <div style={{ fontSize: '12px', color: '#8b949e', lineHeight: 1.6 }}>
+            {result.errorType === 'NETWORK_ERROR' ? (
+              <>
+                ⚠️ The analyzer backend isn’t responding — it may have crashed or isn’t running.
+                <br />
+                Start it with <code style={{ color: '#00d9ff' }}>cargo run</code> (expected at{' '}
+                <code style={{ color: '#00d9ff' }}>localhost:8080</code>), then retry.
+              </>
+            ) : result.errorType === 'PARSE_ERROR' ? (
+              <>
+                ⚠️ The backend returned a malformed response — it may have crashed mid-analysis.
+                Check the analyzer logs, then retry.
+              </>
+            ) : result.errorType === 'INTERNAL_SERVER_ERROR' ? (
+              <>💡 The analyzer hit an internal error during simulation. Check the analyzer logs for the panic trace.</>
+            ) : (
+              <>💡 Tip: Check if the backend is running and all parameters are correct.</>
+            )}
           </div>
         </div>
       ) : (

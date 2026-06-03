@@ -21,6 +21,7 @@ import { ApiError, analyzeService } from '../lib/api';
 import { ResourceHeatmap } from '../components/ResourceHeatmap';
 import { GasGolfingSuggestionsTable } from '../components/GasGolfingSuggestionsTable';
 import type { GasGolfingSuggestion } from '../lib/gasGolfingSort';
+import { extractErrorDetails, createUserFriendlyMessage, formatError } from '../lib/errorHandling';
 
 export default function Home() {
   const [contractId, setContractId] = useState('CAEZJVJ4N7P7GRUVD5NG5LYYH23AQHJUKQEUHW54LR5PGQX3V7FXD7Q');
@@ -100,12 +101,17 @@ export default function Home() {
 
       const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred during analysis';
       
+      // A thrown error here means either: the backend is unreachable/crashed
+      // (fetch throws TypeError), the response body was unparseable (PARSE_ERROR),
+      // or an error we threw above from a non-ok response. formatError classifies all of these.
+      const formatted = formatError(error);
+
       const errorResult: InvocationResult = {
         id: Math.random().toString(36).substring(7),
         functionName: selectedFunction.name,
         inputs,
-        error: errorMessage,
-        errorType: errorType || 'UNKNOWN_ERROR',
+        error: formatted.message,
+        errorType: errorType || formatted.type,
         timestamp: Date.now(),
         success: false,
       };
