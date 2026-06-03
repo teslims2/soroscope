@@ -58,6 +58,7 @@ pub struct MerkleProofItem {
     pub sibling_hash: String,
     pub sibling_is_left: bool,
 }
+use rayon::prelude::*;
 
 /// Represents a Merkle Tree for storing cryptographic state commitments.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -379,6 +380,35 @@ impl MerkleTree {
         while current_level.len() > 1 {
             current_level = Self::parent_level(&current_level);
             self.tree_levels.push(current_level.clone());
+        
+        self.data_leaves = leaves.clone();
+        self.root.copy_from_slice(&Self::calculate_root_hash(leaves));
+        Ok(())
+    }
+
+    /// A helper function to perform the recursive root calculation.
+    fn calculate_root_hash(mut levels: Vec<Vec<u8>>) -> [u8; 32] {
+        while levels.len() > 1 {
+            let next_level: Vec<Vec<u8>> = levels
+                .par_chunks(2)
+                .map(|pair| {
+                    let mut hasher = Sha256::new();
+                    hasher.update(&pair[0]);
+                    if pair.len() == 2 {
+                        hasher.update(&pair[1]);
+                    } else {
+                        hasher.update(&pair[0]); // Hash with itself if odd
+                    }
+                    hasher.finalize().to_vec()
+                })
+                .collect();
+            levels = next_level;
+        }
+        
+        // Return the final hash (the root)
+        let mut root_bytes = [0u8; 32];
+        if let Some(root) = levels.first() {
+            root_bytes.copy_from_slice(root);
         }
 
         self.root = current_level[0];
@@ -744,6 +774,12 @@ mod tests {
         let data: Vec<Vec<u8>> = leaves.iter().map(|s| s.as_bytes().to_vec()).collect();
         tree.build(data).expect("build should succeed");
         tree
+        
+        // Example data leaves
+        let data = vec![b"data1".to_vec(), b"data2".to_vec(), b"data3".to_vec()];
+        
+        let result = tree.build(data);
+        assert!(result.is_ok());
     }
 
     // ── Build tests ───────────────────────────────────────────────────────────

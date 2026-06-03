@@ -49,6 +49,7 @@ clap = { version = "4", features = ["derive"] }
 rsa = "0.9"
 wasm-encoder = { version = "0.240", features = ["wasmparser"] }
 wasmparser = "0.240"
+rayon = "1.8"
 
 [dev-dependencies]
 proptest = "1.4.0"
