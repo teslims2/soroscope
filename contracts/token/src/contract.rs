@@ -14,6 +14,13 @@ use soroban_sdk::{contract, contractimpl, vec, Address, Env, String, Vec};
 fn require_not_paused(e: &Env, operation: u32) {
     if EmergencyGuard::is_paused(e.clone(), operation) {
         panic!("operation paused");
+use soroban_sdk::{contract, contractimpl, Address, Env, String};
+use emergency_guard::{EmergencyGuard, PauseType};
+
+// Helper to enforce pause checks for token operations.
+fn ensure_not_paused(e: &Env, operation: u32) {
+    if EmergencyGuard::is_paused(e.clone(), operation) {
+        panic!("Operation paused");
     }
 }
 
@@ -94,6 +101,8 @@ impl TokenTrait for Token {
         }
 
         require_not_paused(&e, PauseType::MINT);
+        // Ensure minting is not paused.
+        ensure_not_paused(&e, PauseType::MINT);
         let admin = read_administrator(&e);
         admin.require_auth();
         // Initialize EmergencyGuard with single admin by default
@@ -207,6 +216,8 @@ impl TokenTrait for Token {
         }
 
         require_not_paused(&e, PauseType::TRANSFER);
+        // Ensure transfers are not paused.
+        ensure_not_paused(&e, PauseType::TRANSFER);
         from.require_auth();
         e.storage().instance().extend_ttl(100, 100);
 
@@ -226,6 +237,8 @@ impl TokenTrait for Token {
         }
 
         require_not_paused(&e, PauseType::TRANSFER);
+        // Ensure transfer_from respects pause.
+        ensure_not_paused(&e, PauseType::TRANSFER);
         spender.require_auth();
         e.storage().instance().extend_ttl(100, 100);
 
@@ -246,6 +259,8 @@ impl TokenTrait for Token {
         }
 
         require_not_paused(&e, PauseType::BURN);
+        // Ensure burning is not paused.
+        ensure_not_paused(&e, PauseType::BURN);
         from.require_auth();
         e.storage().instance().extend_ttl(100, 100);
 
@@ -264,6 +279,8 @@ impl TokenTrait for Token {
         }
 
         require_not_paused(&e, PauseType::BURN);
+        // Ensure burn_from respects pause.
+        ensure_not_paused(&e, PauseType::BURN);
         spender.require_auth();
         e.storage().instance().extend_ttl(100, 100);
 

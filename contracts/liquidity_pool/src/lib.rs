@@ -4,6 +4,8 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, vec, Address, Env, String, Vec,
 };
 use emergency_guard::{EmergencyGuardTrait, GuardError, PauseType};
+use emergency_guard::{EmergencyGuard, PauseType};
+use soroban_sdk::vec;
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, String, Vec};
 
 #[cfg(test)]
@@ -214,8 +216,40 @@ fn sqrt(x: i128) -> i128 {
     Guard,
     Oracle,
     PendingFeeUpdate,
+/// Grouped pool state — stored as a single instance key to reduce storage footprint.
+#[contracttype]
+#[derive(Clone)]
+pub struct PoolState {
+    pub admin: Address,
+    pub token_a: Address,
+    pub token_b: Address,
+    pub reserve_a: i128,
+    pub reserve_b: i128,
+    pub total_shares: i128,
+    pub fee_bps: i128,
+}
+
+/// Storage keys.
+#[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    /// Single-entry key for all grouped pool state.
+    Pool,
+    /// Per-user LP share balance (persistent storage).
     Balance(Address),
+    /// ERC-20-style allowances (persistent storage).
     Allowance(AllowanceDataKey),
+}
+
+fn load_pool(e: &Env) -> Result<PoolState, Error> {
+    e.storage()
+        .instance()
+        .get::<_, PoolState>(&DataKey::Pool)
+        .ok_or(Error::NotInitialized)
+}
+
+fn save_pool(e: &Env, pool: &PoolState) {
+    e.storage().instance().set(&DataKey::Pool, pool);
 }
 
 pub const MAX_FEE_BPS: i128 = 100;
@@ -296,6 +330,8 @@ fn load_or_init_guard_from_pool(e: &Env, pool: &PoolState) -> GuardState {
 
 fn check_paused(pool: &PoolState, operation: u32, guard: &GuardState) -> Result<(), Error> {
     if guard.pause_state & operation != 0 {
+fn check_not_paused(e: &Env, operation: u32) -> Result<(), Error> {
+    if EmergencyGuard::is_paused(e.clone(), operation) {
         Err(Error::Paused)
     } else {
         Ok(())
@@ -723,6 +759,34 @@ impl LiquidityPool {
             return Err(Error::InvalidFee);
         }
 
+        admin.require_auth();
+        let pool = PoolState {
+            admin: admin.clone(),
+            token_a,
+            token_b,
+            reserve_a: 0,
+            reserve_b: 0,
+            total_shares: 0,
+            fee_bps: 30,
+        };
+        save_pool(&e, &pool);
+        // Initialize the EmergencyGuard with the admin as the sole approver.
+        EmergencyGuard::initialize(e.clone(), vec![&e, admin], 1)
+            .map_err(|_| Error::Unauthorized)?;
+        Ok(())
+    }
+
+    /// Returns the current fee in basis points.
+    pub fn get_fee(e: Env) -> Result<i128, Error> {
+        let pool = load_pool(&e)?;
+        Ok(pool.fee_bps)
+    }
+
+    /// Admin-only: update the swap fee. Valid range: 0–100 bps.
+    pub fn set_fee(e: Env, fee_bps: i128) -> Result<(), Error> {
+        if !(0..=100).contains(&fee_bps) {
+            return Err(Error::InvalidFee);
+        }
         let mut pool = load_pool(&e)?;
         pool.admin.require_auth();
         let old_fee = pool.fee_bps;
@@ -730,6 +794,7 @@ impl LiquidityPool {
         pool.base_fee_bps = fee_bps;
         save_pool(&e, &pool);
 
+        save_pool(&e, &pool);
         e.events().publish(
             (String::from_str(&e, "fee_changed"), pool.admin.clone()),
             FeeChangedEvent {
@@ -853,6 +918,22 @@ impl LiquidityPool {
             .unwrap_or(0)
     }
 
+    /// Admin-only: emergency pause all operations (requires multi-sig).
+    pub fn emergency_pause(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
+        EmergencyGuard::emergency_pause(e, approvers).map_err(|_| Error::Unauthorized)
+    }
+
+    /// Admin-only: resume all paused operations (requires multi-sig).
+    pub fn resume_all(e: Env, approvers: Vec<Address>) -> Result<(), Error> {
+        EmergencyGuard::resume(e, approvers).map_err(|_| Error::Unauthorized)
+    }
+
+    /// Check whether a specific operation is currently paused.
+    pub fn is_paused(e: Env, operation: u32) -> bool {
+        EmergencyGuard::is_paused(e, operation)
+    }
+
+    /// Deposits token A and token B into the pool and mints LP shares.
     pub fn deposit(e: Env, to: Address, amount_a: i128, amount_b: i128) -> Result<i128, Error> {
         guard_check_not_paused(&e, pause_op::DEPOSIT)?;
             &DataKey::Oracle,

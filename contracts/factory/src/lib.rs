@@ -28,6 +28,14 @@ pub enum Error {
 }
 
 const PAUSE_CREATE_PAIR_FLAG: u32 = 1 << 6;
+use emergency_guard::{EmergencyGuard, PauseType};
+
+// Helper to enforce pause checks for factory operations.
+fn ensure_not_paused(e: &Env, operation: u32) {
+    if EmergencyGuard::is_paused(e.clone(), operation) {
+        panic!("Operation paused");
+    }
+}
 
 /// Storage key for pair registry.
 /// Stored in **instance** storage because the factory is a singleton contract
@@ -177,6 +185,8 @@ impl LiquidityPoolFactory {
     ) -> Result<Address, Error> {
         check_not_paused(&env)?;
 
+        // Ensure not paused for mint operation
+        ensure_not_paused(&env, PauseType::MINT);
         let (token_0, token_1) = if token_a < token_b {
             (token_a, token_b)
         } else {

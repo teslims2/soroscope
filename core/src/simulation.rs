@@ -1,12 +1,8 @@
 use crate::parser::ArgParser;
 use crate::rpc_provider::ProviderRegistry;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-<<<<<<< Updated upstream
-// use moka::future::Cache;
-=======
 use ed25519_dalek::Signer as Ed25519Signer;
 use moka::future::Cache;
->>>>>>> Stashed changes
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
