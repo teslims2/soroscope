@@ -13,6 +13,7 @@ import { extractErrorDetails, createUserFriendlyMessage } from '../lib/errorHand
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { ResultViewerSkeleton } from '../components/ResultViewerSkeleton';
 import { NutritionLabelSkeleton } from '../components/NutritionLabelSkeleton';
+import { ApiError, analyzeService } from '../lib/api';
 
 export default function Home() {
   const [contractId, setContractId] = useState('CAEZJVJ4N7P7GRUVD5NG5LYYH23AQHJUKQEUHW54LR5PGQX3V7FXD7Q');
@@ -26,24 +27,10 @@ export default function Home() {
     setLoading(true);
     let errorType: string | undefined;
     try {
-      const response = await fetch('http://localhost:8080/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contract_id: contractId,
-          function_name: selectedFunction.name,
-        }),
+      const report = await analyzeService.analyze({
+        contract_id: contractId,
+        function_name: selectedFunction.name,
       });
-
-      if (!response.ok) {
-        // Parse error response from backend
-        const errorResponse = await extractErrorDetails(response);
-        errorType = errorResponse.error;
-        const userMessage = createUserFriendlyMessage(errorResponse);
-        throw new Error(userMessage);
-      }
-
-      const report = await response.json();
 
       const result: InvocationResult = {
         id: Math.random().toString(36).substring(7),
@@ -58,6 +45,10 @@ export default function Home() {
       setCurrentResult(result);
       addToHistory(result);
     } catch (error) {
+      if (error instanceof ApiError) {
+        errorType = error.body?.error;
+      }
+
       const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred during analysis';
       
       const errorResult: InvocationResult = {
