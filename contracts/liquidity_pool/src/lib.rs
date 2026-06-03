@@ -1804,12 +1804,16 @@ impl LiquidityPool {
         soroban_sdk::token::Client::new(&e, &pool.token_a).transfer(
         soroban_sdk::token::Client::new(&e, &pool.token_a).transfer(
         soroban_sdk::token::Client::new(&e, &token_a).transfer(
+        soroban_sdk::token::Client::new(&e, &pool.token_a).transfer(
+        soroban_sdk::token::Client::new(&e, &token_a).transfer(
             &e.current_contract_address(),
             &to,
             &amount_a,
         );
         soroban_sdk::token::Client::new(&e, &token_b).transfer(
         soroban_sdk::token::Client::new(&e, &pool.token_b).transfer(
+        soroban_sdk::token::Client::new(&e, &pool.token_b).transfer(
+        soroban_sdk::token::Client::new(&e, &token_b).transfer(
         soroban_sdk::token::Client::new(&e, &pool.token_b).transfer(
         soroban_sdk::token::Client::new(&e, &token_b).transfer(
             &e.current_contract_address(),

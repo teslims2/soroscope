@@ -1,4 +1,5 @@
 use super::*;
+use emergency_guard::EmergencyGuardTrait;
 use soroban_sdk::{
     contract, contractimpl, contracttype,
     testutils::{Address as _, Events, Ledger},
@@ -780,6 +781,85 @@ fn test_pause_and_unpause() {
     token_b_admin.mint(&user, &500);
     let more_shares = client.deposit(&user, &500, &500);
     assert!(more_shares > 0);
+}
+
+#[test]
+fn test_emergency_guard_trait_impl() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let contract_id = e.register(LiquidityPool, ());
+    let client = LiquidityPoolClient::new(&e, &contract_id);
+
+    let admin1 = Address::generate(&e);
+    let admin2 = Address::generate(&e);
+    let admin3 = Address::generate(&e);
+    let admins = soroban_sdk::vec![&e, admin1.clone(), admin2.clone(), admin3.clone()];
+
+    let token_a = e
+        .register_stellar_asset_contract_v2(admin1.clone())
+        .address();
+    let token_b = e
+        .register_stellar_asset_contract_v2(admin1.clone())
+        .address();
+
+    client.initialize(&admin1, &token_a, &token_b);
+
+    <LiquidityPool as EmergencyGuardTrait>::init_guard(&e, admins.clone(), 2).unwrap();
+
+    assert_eq!(<LiquidityPool as EmergencyGuardTrait>::get_threshold(&e), 2);
+    assert_eq!(
+        <LiquidityPool as EmergencyGuardTrait>::get_admins(&e),
+        admins.clone()
+    );
+    assert!(<LiquidityPool as EmergencyGuardTrait>::is_admin(
+        &e, &admin1
+    ));
+    assert!(<LiquidityPool as EmergencyGuardTrait>::is_admin(
+        &e, &admin2
+    ));
+    assert!(!<LiquidityPool as EmergencyGuardTrait>::is_admin(
+        &e,
+        &Address::generate(&e)
+    ));
+
+    <LiquidityPool as EmergencyGuardTrait>::set_pause_state(&e, PauseType::SWAP, true).unwrap();
+    assert_eq!(
+        <LiquidityPool as EmergencyGuardTrait>::get_pause_state(&e),
+        PauseType::SWAP
+    );
+    assert_eq!(
+        <LiquidityPool as EmergencyGuardTrait>::check_not_paused(&e, PauseType::SWAP),
+        Err(GuardError::Paused)
+    );
+    assert_eq!(
+        <LiquidityPool as EmergencyGuardTrait>::check_not_paused(&e, PauseType::DEPOSIT),
+        Ok(())
+    );
+
+    let approvers = soroban_sdk::vec![&e, admin1.clone(), admin2.clone()];
+    <LiquidityPool as EmergencyGuardTrait>::emergency_pause_all(&e, approvers.clone()).unwrap();
+    assert_eq!(
+        <LiquidityPool as EmergencyGuardTrait>::get_pause_state(&e),
+        u32::MAX
+    );
+
+    <LiquidityPool as EmergencyGuardTrait>::resume_all(&e, approvers.clone()).unwrap();
+    assert_eq!(
+        <LiquidityPool as EmergencyGuardTrait>::get_pause_state(&e),
+        0
+    );
+
+    <LiquidityPool as EmergencyGuardTrait>::add_admin(&e, approvers.clone(), admin3.clone())
+        .unwrap();
+    assert!(<LiquidityPool as EmergencyGuardTrait>::is_admin(
+        &e, &admin3
+    ));
+
+    <LiquidityPool as EmergencyGuardTrait>::remove_admin(&e, approvers, admin3.clone()).unwrap();
+    assert!(!<LiquidityPool as EmergencyGuardTrait>::is_admin(
+        &e, &admin3
+    ));
 }
 
 #[test]
