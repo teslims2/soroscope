@@ -745,5 +745,8 @@ impl DefaultEmergencyGuard {
     /// Pause a specific operation
     pub fn pause(env: &Env, operation: u32) -> Result<(), GuardError> {
         Self::set_pause_state(env, operation, true)
+    /// Public wrapper to validate a set of approvers against the stored threshold.
+    pub fn validate_multi_sig(env: Env, approvers: Vec<Address>) -> Result<(), GuardError> {
+        Self::check_multi_sig(&env, &approvers)
     }
 }

@@ -1,6 +1,7 @@
 use crate::contract::{Token, TokenClient};
 use emergency_guard::{GuardError, PauseType};
 use soroban_sdk::{testutils::Address as _, vec, Address, Env, String};
+use soroban_sdk::{testutils::Address as _, Address, Env, String, vec, Vec};
 
 #[test]
 fn test_mint_and_transfer() {
@@ -21,7 +22,8 @@ fn test_mint_and_transfer() {
         &String::from_str(&env, "TEST"),
     );
 
-    client.mint(&user1, &1000);
+    let approvers = vec![&env, admin.clone()];
+    client.mint(&approvers, &user1, &1000);
     assert_eq!(client.balance(&user1), 1000);
 
     client.transfer(&user1, &user2, &200);
@@ -48,7 +50,8 @@ fn test_allowance() {
         &String::from_str(&env, "TEST"),
     );
 
-    client.mint(&user1, &1000);
+    let approvers = vec![&env, admin.clone()];
+    client.mint(&approvers, &user1, &1000);
 
     client.approve(&user1, &spender, &500, &200);
     assert_eq!(client.allowance(&user1, &spender), 500);

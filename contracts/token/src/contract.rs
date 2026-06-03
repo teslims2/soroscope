@@ -33,6 +33,13 @@ pub trait TokenTrait {
     fn guard_admins(e: Env) -> Vec<Address>;
     fn guard_threshold(e: Env) -> u32;
     fn guard_is_paused(e: Env, operation: u32) -> bool;
+use emergency_guard::EmergencyGuard;
+use soroban_sdk::{contract, contractimpl, Address, Env, String, vec, Vec};
+
+pub trait TokenTrait {
+    fn initialize(e: Env, admin: Address, decimal: u32, name: String, symbol: String);
+    fn mint(e: Env, approvers: Vec<Address>, to: Address, amount: i128);
+    fn set_admin(e: Env, approvers: Vec<Address>, new_admin: Address);
     fn allowance(e: Env, from: Address, spender: Address) -> i128;
     fn approve(e: Env, from: Address, spender: Address, amount: i128, expiration_ledger: u32);
     fn balance(e: Env, id: Address) -> i128;
@@ -73,6 +80,16 @@ impl TokenTrait for Token {
         require_not_paused(&e, PauseType::MINT);
         let admin = read_administrator(&e);
         admin.require_auth();
+        // Initialize EmergencyGuard with single admin by default
+        let admins = vec![&e, admin.clone()];
+        EmergencyGuard::initialize(e.clone(), admins, 1).expect("Failed to init emergency guard");
+    }
+
+    fn mint(e: Env, approvers: Vec<Address>, to: Address, amount: i128) {
+        // Validate approvers using EmergencyGuard multi-sig logic
+        EmergencyGuard::validate_multi_sig(e.clone(), approvers)
+            .expect("multi-sig validation failed");
+
         e.storage().instance().extend_ttl(100, 100);
 
         // Check if minting is paused (using MINT pause type = 1 << 4 = 16)
@@ -90,6 +107,18 @@ impl TokenTrait for Token {
 
         EmergencyGuard::rotate_admin(e.clone(), vec![&e, admin.clone()], admin.clone(), new_admin.clone())
             .expect("failed to rotate token admin");
+    fn set_admin(e: Env, approvers: Vec<Address>, new_admin: Address) {
+        // Use EmergencyGuard to perform admin rotation via multi-sig
+        // First, add the new admin (requires approvers signatures)
+        EmergencyGuard::add_admin(e.clone(), approvers.clone(), new_admin.clone())
+            .expect("failed to add admin via EmergencyGuard");
+
+        // Then remove the old admin (requires same approvers)
+        let old = read_administrator(&e);
+        EmergencyGuard::remove_admin(e.clone(), approvers.clone(), old.clone())
+            .expect("failed to remove old admin via EmergencyGuard");
+
+        e.storage().instance().extend_ttl(100, 100);
         write_administrator(&e, &new_admin);
     }
 
