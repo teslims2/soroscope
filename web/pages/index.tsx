@@ -168,19 +168,8 @@ export default function Home() {
       </Head>
       <div style={{ minHeight: '100vh', backgroundColor: '#0f1117' }}>
       {/* Header */}
-      <header
-        style={{
-          backgroundColor: '#1a1f26',
-          borderBottom: '1px solid #30363d',
-          padding: '24px 0',
-          position: 'sticky',
-          top: 0,
-          zIndex: 100,
-          display: 'flex',
-          justifyContent: 'space-between'
-        }}
-      >
-        <div style={{ maxWidth: '1200px', paddingLeft: '140px' }}>
+      <header className="sticky top-0 z-[100] flex flex-col gap-4 border-b border-[#30363d] bg-[#1a1f26] px-6 py-6 sm:flex-row sm:items-center sm:justify-between sm:px-10 lg:pl-[140px] lg:pr-[125px]">
+        <div className="max-w-[1200px]">
           <h1 style={{ margin: '0 0 12px 0', fontSize: '28px', fontWeight: '700', color: '#00d9ff', letterSpacing: '0.5px' }}>
             SoroScope
           </h1>
@@ -189,14 +178,14 @@ export default function Home() {
           </p>
         </div>
 
-        {/* Wallet Connection in Top-Right */}
-        <div className="pr-[125px]">
+        {/* Wallet Connection */}
+        <div>
           <ConnectButton />
         </div>
       </header>
 
       {/* Main Content */}
-      <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '24px' }}>
+      <main className="mx-auto max-w-[1200px] px-4 py-6 sm:px-6">
 
         {/* WASM Upload Zone */}
         <div
@@ -325,7 +314,7 @@ export default function Home() {
           )}
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: '24px' }}>
+        <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
           {/* Left Column - Function Selection & Form */}
           <div>
             <FunctionSidebar

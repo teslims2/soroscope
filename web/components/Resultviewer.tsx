@@ -49,7 +49,7 @@ export function ResultViewer({ result }: ResultViewerProps) {
         border: `1px solid #30363d`,
       }}
     >
-      <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ marginBottom: '16px', display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h3
             style={{
