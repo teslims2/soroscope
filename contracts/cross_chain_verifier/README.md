@@ -41,7 +41,7 @@ Stores a Merkle state root for a given source-chain block height. Only the admin
 Returns the stored state root for a block height, or `None` if not yet posted.
 
 ### `verify_message(block_height, leaf, proof, proof_flags) → bool`
-Verifies a Binary Merkle Tree proof. Returns `true` if the `leaf` (message hash) is provably included in the state root at `block_height`.
+Verifies a Binary Merkle Tree proof. Returns `true` if the `leaf` (message hash) is provably included in the state root at `block_height`. Does **not** consume the nonce — use `verify_message_and_consume` to prevent replays.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -49,6 +49,35 @@ Verifies a Binary Merkle Tree proof. Returns `true` if the `leaf` (message hash)
 | `leaf` | `BytesN<32>` | SHA-256 hash of the cross-chain message |
 | `proof` | `Vec<BytesN<32>>` | Ordered list of sibling hashes from leaf to root |
 | `proof_flags` | `Vec<bool>` | `true` = sibling is on the left, `false` = sibling is on the right |
+
+### `verify_message_and_consume(block_height, nonce, leaf, proof, proof_flags) → bool`
+Like `verify_message` but also marks `nonce` as processed. Panics with `"nonce already processed"` if the same nonce is submitted a second time, providing built-in replay protection.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `nonce` | `u64` | Unique identifier for this message; must not have been used before |
+
+### `is_nonce_processed(nonce) → bool`
+Returns `true` if `nonce` has already been consumed by `verify_message_and_consume`.
+
+### `add_authorized_signer(public_key, algorithm)`
+Registers a public key as an authorized cross-chain message signer. Only the admin can call this.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `public_key` | `Bytes` | Raw public key bytes (32 bytes for Ed25519, 33 bytes compressed for Secp256k1) |
+| `algorithm` | `SignatureAlgorithm` | `Ed25519` or `Secp256k1` |
+
+Panics with `"Signer already authorized"` if the key is already registered.
+
+### `remove_authorized_signer(public_key)`
+Removes a previously registered signer. Panics with `"Signer not found"` if the key is not registered.
+
+### `get_signer_count() → u32`
+Returns the number of currently authorized signers.
+
+### `verify_signed_message(signed_message, block_height, proof, proof_flags) → bool`
+Verifies that a `SignedMessage` was both included in the Merkle tree at `block_height` and signed by a currently authorized signer. Returns `false` if either check fails.
 
 ---
 
