@@ -24,10 +24,15 @@ impl PauseType {
         PauseType(value)
     }
 
+    /// Returns true if `operation` bit is set in the pause bitmask.
+    /// `#[inline(always)]` ensures this reduces to a single AND + comparison
+    /// instruction at the call site, minimising gas on every guard check.
+    #[inline(always)]
     pub fn is_paused(&self, operation: u32) -> bool {
         (self.0 & operation) != 0
     }
 
+    #[inline(always)]
     pub fn set_paused(&mut self, operation: u32, paused: bool) {
         if paused {
             self.0 |= operation;
