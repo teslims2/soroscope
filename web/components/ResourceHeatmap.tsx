@@ -242,6 +242,12 @@ export function ResourceHeatmap({ resourceCost }: ResourceHeatmapProps) {
                   Limit: 100M instructions
                 </p>
               </div>
+              {/* Tooltip overlay — #405 */}
+              <div className="pointer-events-none absolute inset-x-0 bottom-full mb-2 flex justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-30">
+                <div className="bg-slate-800 border border-cyan-500/30 rounded-lg px-3 py-2 text-[11px] font-mono text-cyan-300 shadow-xl whitespace-nowrap">
+                  CPU Instructions — {cpuPct.toFixed(1)}% of 100M limit
+                </div>
+              </div>
             </div>
 
             {/* SVG Ring 2: RAM Alloc */}
@@ -280,6 +286,12 @@ export function ResourceHeatmap({ resourceCost }: ResourceHeatmapProps) {
                   <Activity className="h-3.5 w-3.5 text-slate-500" />
                   Limit: 40MB Alloc
                 </p>
+              </div>
+              {/* Tooltip overlay — #405 */}
+              <div className="pointer-events-none absolute inset-x-0 bottom-full mb-2 flex justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-30">
+                <div className="bg-slate-800 border border-amber-500/30 rounded-lg px-3 py-2 text-[11px] font-mono text-amber-300 shadow-xl whitespace-nowrap">
+                  RAM — {ramPct.toFixed(1)}% of 40MB limit ({formatBytes(ram_bytes)})
+                </div>
               </div>
             </div>
 
@@ -321,6 +333,12 @@ export function ResourceHeatmap({ resourceCost }: ResourceHeatmapProps) {
                   <Database className="h-3.5 w-3.5 text-slate-500" />
                   Limit: 250KB Total I/O
                 </p>
+              </div>
+              {/* Tooltip overlay — #405 */}
+              <div className="pointer-events-none absolute inset-x-0 bottom-full mb-2 flex justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-30">
+                <div className="bg-slate-800 border border-purple-500/30 rounded-lg px-3 py-2 text-[11px] font-mono text-purple-300 shadow-xl whitespace-nowrap">
+                  Ledger I/O — {(((ledger_read_bytes + ledger_write_bytes) / (LIMITS.LEDGER_READ + LIMITS.LEDGER_WRITE)) * 100).toFixed(1)}% of 250KB limit ({formatBytes(ledger_read_bytes + ledger_write_bytes)})
+                </div>
               </div>
             </div>
           </div>
